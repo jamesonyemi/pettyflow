@@ -16,6 +16,8 @@ class ChainTamperedException(Exception):
     pass
 
 GENESIS_PREVIOUS_HASH = b"0" * 32  # 32 zero bytes for Genesis Block
+DEBIT_BYTES = b"DEBIT"
+CREDIT_BYTES = b"CREDIT"
 
 def compute_canonical_bytes(
     seq_num: int,
@@ -27,26 +29,37 @@ def compute_canonical_bytes(
     legs: List
 ) -> bytes:
     """
-    Compute canonical byte payload for HMAC signing without redundant dict/object allocations.
+    Compute canonical byte payload for HMAC signing with zero-alloc C formatting.
     """
+    tenant_b = tenant_id.encode('utf-8') if type(tenant_id) is str else tenant_id
+    tx_b = tx_id.encode('utf-8') if type(tx_id) is str else tx_id
+    desc_b = description.encode('utf-8') if type(description) is str else description
+    ts_b = timestamp.encode('utf-8') if type(timestamp) is str else timestamp
+
     legs_parts = []
     for leg in legs:
-        if isinstance(leg, dict):
-            acct = leg['acct'].encode('utf-8') if isinstance(leg['acct'], str) else leg['acct']
-            type_str = leg['type'].encode('utf-8') if isinstance(leg['type'], str) else leg['type']
+        if type(leg) is dict:
+            acct_raw = leg['acct']
+            type_raw = leg['type']
             amt = leg['amt']
         else:
-            acct = leg.account_id.encode('utf-8') if isinstance(leg.account_id, str) else leg.account_id
-            type_str = leg.entry_type.value.encode('utf-8') if isinstance(leg.entry_type.value, str) else leg.entry_type.value
+            acct_raw = leg.account_id
+            type_raw = leg.entry_type._value_ if type(leg.entry_type) is EntryType else leg.entry_type
             amt = leg.amount_scaled
-        legs_parts.append(b"%b:%b:%d" % (acct, type_str, amt))
+
+        acct = acct_raw.encode('utf-8') if type(acct_raw) is str else acct_raw
+        if type_raw == "DEBIT" or type_raw is EntryType.DEBIT:
+            type_b = DEBIT_BYTES
+        elif type_raw == "CREDIT" or type_raw is EntryType.CREDIT:
+            type_b = CREDIT_BYTES
+        elif type(type_raw) is bytes:
+            type_b = type_raw
+        else:
+            type_b = type_raw.encode('utf-8')
+
+        legs_parts.append(b"%b:%b:%d" % (acct, type_b, amt))
 
     legs_bytes = b";".join(legs_parts)
-
-    tenant_b = tenant_id.encode('utf-8') if isinstance(tenant_id, str) else tenant_id
-    tx_b = tx_id.encode('utf-8') if isinstance(tx_id, str) else tx_id
-    desc_b = description.encode('utf-8') if isinstance(description, str) else description
-    ts_b = timestamp.encode('utf-8') if isinstance(timestamp, str) else timestamp
 
     return b"%d|%b|%b|%b|%b|%b|%b" % (
         seq_num,
@@ -90,8 +103,8 @@ class CryptographicLedgerChain:
         self.blocks: List[LedgerBlock] = []
 
     def compute_hmac(self, canonical_bytes: bytes) -> bytes:
-        """Compute HMAC-SHA256 signature over payload bytes using tenant key."""
-        return hmac.new(self.secret_key, canonical_bytes, hashlib.sha256).digest()
+        """Compute HMAC-SHA256 signature using optimized C implementation."""
+        return hmac.digest(self.secret_key, canonical_bytes, "sha256")
 
     def append_transaction(self, tx: TransactionBatch) -> LedgerBlock:
         """
@@ -101,34 +114,57 @@ class CryptographicLedgerChain:
 
         previous_hash = self.blocks[-1].current_hash if self.blocks else GENESIS_PREVIOUS_HASH
         seq_num = len(self.blocks) + 1
-        ts_str = tx.timestamp.isoformat()
+        ts_val = tx.timestamp
+        ts_str = ts_val if type(ts_val) is str else ts_val.isoformat()
 
-        canonical_payload = compute_canonical_bytes(
+        tenant_id = tx.tenant_id
+        tx_id = tx.transaction_id
+        desc = tx.description
+
+        tenant_b = tenant_id.encode('utf-8') if type(tenant_id) is str else tenant_id
+        tx_b = tx_id.encode('utf-8') if type(tx_id) is str else tx_id
+        desc_b = desc.encode('utf-8') if type(desc) is str else desc
+        ts_b = ts_str.encode('utf-8') if type(ts_str) is str else ts_str
+
+        legs_parts = []
+        legs_serialized = []
+        for leg in tx.legs:
+            acct_raw = leg.account_id
+            type_raw = leg.entry_type._value_ if type(leg.entry_type) is EntryType else leg.entry_type
+            amt = leg.amount_scaled
+
+            acct_b = acct_raw.encode('utf-8') if type(acct_raw) is str else acct_raw
+            if type_raw == "DEBIT" or type_raw is EntryType.DEBIT:
+                type_b = DEBIT_BYTES
+            elif type_raw == "CREDIT" or type_raw is EntryType.CREDIT:
+                type_b = CREDIT_BYTES
+            elif type(type_raw) is bytes:
+                type_b = type_raw
+            else:
+                type_b = type_raw.encode('utf-8')
+
+            legs_parts.append(b"%b:%b:%d" % (acct_b, type_b, amt))
+            legs_serialized.append({"acct": acct_raw, "type": type_raw, "amt": amt})
+
+        legs_bytes = b";".join(legs_parts)
+
+        canonical_payload = b"%d|%b|%b|%b|%b|%b|%b" % (
             seq_num,
-            tx.tenant_id,
-            tx.transaction_id,
-            tx.description,
+            tenant_b,
+            tx_b,
+            desc_b,
             previous_hash,
-            ts_str,
-            tx.legs
+            ts_b,
+            legs_bytes
         )
 
-        current_hash = self.compute_hmac(canonical_payload)
-
-        legs_serialized = [
-            {
-                "acct": leg.account_id,
-                "type": leg.entry_type.value,
-                "amt": leg.amount_scaled
-            }
-            for leg in tx.legs
-        ]
+        current_hash = hmac.digest(self.secret_key, canonical_payload, "sha256")
 
         block = LedgerBlock(
             sequence_number=seq_num,
-            tenant_id=tx.tenant_id,
-            transaction_id=tx.transaction_id,
-            description=tx.description,
+            tenant_id=tenant_id,
+            transaction_id=tx_id,
+            description=desc,
             legs_payload=legs_serialized,
             previous_hash=previous_hash,
             current_hash=current_hash,

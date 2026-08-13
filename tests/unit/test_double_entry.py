@@ -124,7 +124,7 @@ class TestDoubleEntryEngine(unittest.TestCase):
         """
         chain = CryptographicLedgerChain(tenant_id=self.tenant_id, secret_key=self.secret_key)
         
-        # Pre-create transaction templates to measure core ledger & HMAC append speed
+        now_iso = datetime.datetime.now().isoformat()
         tx_list = [
             TransactionBatch(
                 transaction_id=f"tx-bench-{i}",
@@ -133,7 +133,8 @@ class TestDoubleEntryEngine(unittest.TestCase):
                 legs=[
                     PostingLeg(account_id=self.supplies_account.account_id, entry_type=EntryType.DEBIT, amount_scaled=100_000),
                     PostingLeg(account_id=self.cash_account.account_id, entry_type=EntryType.CREDIT, amount_scaled=100_000)
-                ]
+                ],
+                timestamp=now_iso
             )
             for i in range(10_000)
         ]

@@ -71,8 +71,13 @@ class TransactionBatch:
         Enforce Zero-Sum Double-Entry Invariant:
         sum(Debits) == sum(Credits)
         """
-        total_debits = sum(leg.amount_scaled for leg in self.legs if leg.entry_type == EntryType.DEBIT)
-        total_credits = sum(leg.amount_scaled for leg in self.legs if leg.entry_type == EntryType.CREDIT)
+        total_debits = 0
+        total_credits = 0
+        for leg in self.legs:
+            if leg.entry_type == EntryType.DEBIT:
+                total_debits += leg.amount_scaled
+            else:
+                total_credits += leg.amount_scaled
 
         if total_debits != total_credits:
             raise UnbalancedLedgerEntryException(
