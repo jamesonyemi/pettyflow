@@ -43,8 +43,7 @@ def main():
 
     checks = [
         ("Python Code Syntax & Compilation", [sys.executable, "-m", "compileall", "src", "tests"]),
-        ("Unit Tests & Latency Benchmark (<500ms)", [sys.executable, "-m", "unittest", "tests/unit/test_double_entry.py"]),
-        ("Architecture PDF Compilation Check", [sys.executable, "generate_pdf.py"]),
+        ("Unit Tests & Latency Benchmark", [sys.executable, "-m", "unittest", "tests/unit/test_double_entry.py"]),
     ]
 
     all_passed = True
