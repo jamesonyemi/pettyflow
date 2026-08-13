@@ -65,7 +65,7 @@ graph TD
     H -- "Valid" --> J["Committed Ledger Block"]
 ```
 
-### Jeff Dean Latency Budget & System Invariants
+### Latency Budget & System Invariants
 
 | Layer / Operation | Target Latency Budget | Technology / Implementation |
 | :--- | :--- | :--- |

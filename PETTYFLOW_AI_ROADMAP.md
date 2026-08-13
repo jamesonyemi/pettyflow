@@ -1,12 +1,12 @@
 # PETTYFLOW: AI EXECUTION ROADMAP (12-WEEK DELIVERABLE SPECIFICATION)
 **Architectural Blueprint & AI Code Generation Protocol**  
-**Design Standard**: Jeff Dean Distributed Systems Engineering  
+**Design Standard**: Distributed Systems Engineering  
 **Version**: 1.0.0  
 **Target Repository**: `pettyflow`
 
 ---
 
-## SECTION 0: EXECUTIVE SYSTEM PRINCIPLES & JEFF DEAN INVARIANTS
+## SECTION 0: EXECUTIVE SYSTEM PRINCIPLES & INVARIANTS
 
 Every line of code and architectural artifact produced by AI execution agents MUST adhere to these fundamental engineering invariants:
 
@@ -226,7 +226,7 @@ Every AI execution step that alters system structure MUST document the change us
 # ADR-XXX: [Short Title]
 
 ## Context & Problem Statement
-[Describe the technical driver, constraint, or Jeff Dean latency threshold requirement.]
+[Describe the technical driver, constraint, or latency threshold requirement.]
 
 ## Decision Drivers
 - Latency threshold: [e.g., < 2ms commit]
