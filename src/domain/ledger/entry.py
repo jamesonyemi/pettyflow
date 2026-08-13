@@ -5,9 +5,8 @@ account classifications, and atomic posting validation.
 """
 
 from enum import Enum
-from typing import List, Dict, Optional
+from typing import List
 from dataclasses import dataclass, field
-import uuid
 import datetime
 
 class AccountCategory(Enum):

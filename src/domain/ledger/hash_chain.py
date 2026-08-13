@@ -5,8 +5,6 @@ High-performance implementation targeted for sub-millisecond execution.
 """
 
 import hmac
-import hashlib
-import datetime
 from typing import List
 from dataclasses import dataclass
 from src.domain.ledger.entry import TransactionBatch, EntryType
@@ -18,6 +16,17 @@ class ChainTamperedException(Exception):
 GENESIS_PREVIOUS_HASH = b"0" * 32  # 32 zero bytes for Genesis Block
 DEBIT_BYTES = b"DEBIT"
 CREDIT_BYTES = b"CREDIT"
+
+_ENCODE_CACHE = {}
+
+def _get_bytes(s) -> bytes:
+    if type(s) is bytes:
+        return s
+    b = _ENCODE_CACHE.get(s)
+    if b is None:
+        b = s.encode('utf-8')
+        _ENCODE_CACHE[s] = b
+    return b
 
 def compute_canonical_bytes(
     seq_num: int,
@@ -121,10 +130,10 @@ class CryptographicLedgerChain:
         tx_id = tx.transaction_id
         desc = tx.description
 
-        tenant_b = tenant_id.encode('utf-8') if type(tenant_id) is str else tenant_id
-        tx_b = tx_id.encode('utf-8') if type(tx_id) is str else tx_id
-        desc_b = desc.encode('utf-8') if type(desc) is str else desc
-        ts_b = ts_str.encode('utf-8') if type(ts_str) is str else ts_str
+        tenant_b = _get_bytes(tenant_id)
+        tx_b = _get_bytes(tx_id)
+        desc_b = _get_bytes(desc)
+        ts_b = _get_bytes(ts_str)
 
         legs_parts = []
         legs_serialized = []
@@ -133,15 +142,13 @@ class CryptographicLedgerChain:
             type_raw = leg.entry_type._value_ if type(leg.entry_type) is EntryType else leg.entry_type
             amt = leg.amount_scaled
 
-            acct_b = acct_raw.encode('utf-8') if type(acct_raw) is str else acct_raw
+            acct_b = _get_bytes(acct_raw)
             if type_raw == "DEBIT" or type_raw is EntryType.DEBIT:
                 type_b = DEBIT_BYTES
             elif type_raw == "CREDIT" or type_raw is EntryType.CREDIT:
                 type_b = CREDIT_BYTES
-            elif type(type_raw) is bytes:
-                type_b = type_raw
             else:
-                type_b = type_raw.encode('utf-8')
+                type_b = _get_bytes(type_raw)
 
             legs_parts.append(b"%b:%b:%d" % (acct_b, type_b, amt))
             legs_serialized.append({"acct": acct_raw, "type": type_raw, "amt": amt})
