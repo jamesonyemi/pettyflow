@@ -37,20 +37,60 @@ CREATE TABLE IF NOT EXISTS accounts (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- 4. Postings Table (Partitioned by tenant_id and created_at range)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_accounts_tenant_account
+ON accounts (tenant_id, account_id);
+
+-- 4. Postings Table
+-- The root table ranges by month; each monthly child is hash partitioned by
+-- tenant_id. Hash partitioning keeps a bounded number of physical partitions
+-- while ensuring a tenant is always routed to a single child per month.
 CREATE TABLE IF NOT EXISTS postings (
     posting_id UUID NOT NULL DEFAULT uuid_generate_v4(),
-    tenant_id UUID NOT NULL,
+    tenant_id UUID NOT NULL REFERENCES tenants(tenant_id) ON DELETE RESTRICT,
     transaction_id UUID NOT NULL,
     account_id UUID NOT NULL,
     entry_type VARCHAR(10) NOT NULL CHECK (entry_type IN ('DEBIT', 'CREDIT')),
     amount_scaled BIGINT NOT NULL CHECK (amount_scaled > 0),
     sequence_number BIGINT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (posting_id, tenant_id, created_at)
+    PRIMARY KEY (posting_id, tenant_id, created_at),
+    CONSTRAINT fk_postings_account
+        FOREIGN KEY (tenant_id, account_id)
+        REFERENCES accounts (tenant_id, account_id)
+        ON DELETE RESTRICT
 ) PARTITION BY RANGE (created_at);
 
--- Create default monthly partition for initial rollout
+-- Provision the current calendar month and tenant hash partitions. Operations
+-- must add the following month before it begins; postings_default prevents
+-- write outages if that task is delayed.
+DO $$
+DECLARE
+    month_start DATE := date_trunc('month', CURRENT_DATE)::DATE;
+    month_end DATE := (date_trunc('month', CURRENT_DATE) + INTERVAL '1 month')::DATE;
+    parent_name TEXT := 'postings_' || to_char(CURRENT_DATE, 'YYYY_MM');
+    partition_number INTEGER;
+BEGIN
+    EXECUTE format(
+        'CREATE TABLE IF NOT EXISTS %I PARTITION OF postings
+         FOR VALUES FROM (%L) TO (%L) PARTITION BY HASH (tenant_id)',
+        parent_name,
+        month_start,
+        month_end
+    );
+
+    FOR partition_number IN 0..15 LOOP
+        EXECUTE format(
+            'CREATE TABLE IF NOT EXISTS %I PARTITION OF %I
+             FOR VALUES WITH (MODULUS 16, REMAINDER %s)',
+            parent_name || '_t' || partition_number,
+            parent_name,
+            partition_number
+        );
+    END LOOP;
+END $$;
+
+-- Fallback for dates not yet provisioned. A scheduled migration should create
+-- future monthly partitions; this partition is monitored for non-zero rows.
 CREATE TABLE IF NOT EXISTS postings_default PARTITION OF postings DEFAULT;
 
 -- Compound index for fast tenant account balance lookups

@@ -4,7 +4,7 @@ Implements cache-aside balance aggregation, optimistic locking, and sub-100 micr
 atomic balance mutation via Lua scripting.
 """
 
-from typing import Optional, Tuple, Any
+from typing import Any, Optional, Tuple
 
 # Atomic Balance Mutation Lua Script
 # KEYS[1]: Balance key (pettyflow:<tenant_id>:<account_id>:balance)
@@ -54,8 +54,15 @@ class RedisBalanceCache:
         self._script_sha = None
 
     def _get_keys(self, tenant_id: str, account_id: str) -> Tuple[str, str]:
-        balance_key = f"pettyflow:{tenant_id}:{account_id}:balance"
-        version_key = f"pettyflow:{tenant_id}:{account_id}:version"
+        """Return co-located Redis Cluster keys for an account balance."""
+        if not tenant_id or not account_id:
+            raise ValueError("tenant_id and account_id must be non-empty")
+
+        # Redis Cluster requires every key passed to EVAL to be in one hash slot.
+        # The shared hash tag keeps the balance and optimistic-lock version together.
+        key_prefix = f"pettyflow:{{{tenant_id}:{account_id}}}"
+        balance_key = f"{key_prefix}:balance"
+        version_key = f"{key_prefix}:version"
         return balance_key, version_key
 
     def get_balance(self, tenant_id: str, account_id: str) -> Optional[Tuple[int, int]]:
@@ -81,6 +88,11 @@ class RedisBalanceCache:
         """
         Initialize or populate cache-aside balance with optimistic version.
         """
+        if not isinstance(amount_scaled, int) or isinstance(amount_scaled, bool):
+            raise TypeError("amount_scaled must be an integer")
+        if not isinstance(version_id, int) or isinstance(version_id, bool) or version_id < 0:
+            raise ValueError("version_id must be a non-negative integer")
+
         b_key, v_key = self._get_keys(tenant_id, account_id)
         pipe = self.client.pipeline()
         pipe.set(b_key, str(amount_scaled))
@@ -99,6 +111,11 @@ class RedisBalanceCache:
         Execute atomic Lua mutation in Redis.
         Returns updated (new_balance, new_version).
         """
+        if not isinstance(delta_scaled, int) or isinstance(delta_scaled, bool):
+            raise TypeError("delta_scaled must be an integer")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            raise TypeError("expected_version must be an integer")
+
         b_key, v_key = self._get_keys(tenant_id, account_id)
         
         # Execute Lua script

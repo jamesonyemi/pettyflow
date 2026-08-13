@@ -70,10 +70,10 @@ class TestRedisBalanceCacheSetBalance(unittest.TestCase):
         result = cache.set_balance("tenant-1", "acc-1", 200000, version_id=5)
 
         pipe_mock.set.assert_any_call(
-            "pettyflow:tenant-1:acc-1:balance", "200000"
+            "pettyflow:{tenant-1:acc-1}:balance", "200000"
         )
         pipe_mock.set.assert_any_call(
-            "pettyflow:tenant-1:acc-1:version", "5"
+            "pettyflow:{tenant-1:acc-1}:version", "5"
         )
         pipe_mock.execute.assert_called_once()
         self.assertTrue(result)
@@ -132,8 +132,8 @@ class TestRedisBalanceCacheInvalidate(unittest.TestCase):
         cache = RedisBalanceCache(redis_client=client)
         result = cache.invalidate_cache("tenant-1", "acc-1")
         client.delete.assert_called_once_with(
-            "pettyflow:tenant-1:acc-1:balance",
-            "pettyflow:tenant-1:acc-1:version"
+            "pettyflow:{tenant-1:acc-1}:balance",
+            "pettyflow:{tenant-1:acc-1}:version"
         )
         self.assertTrue(result)
 
@@ -145,8 +145,33 @@ class TestRedisBalanceCacheKeyNamespace(unittest.TestCase):
         client = MagicMock()
         cache = RedisBalanceCache(redis_client=client)
         b_key, v_key = cache._get_keys("acme-corp", "cash-001")
-        self.assertEqual(b_key, "pettyflow:acme-corp:cash-001:balance")
-        self.assertEqual(v_key, "pettyflow:acme-corp:cash-001:version")
+        self.assertEqual(b_key, "pettyflow:{acme-corp:cash-001}:balance")
+        self.assertEqual(v_key, "pettyflow:{acme-corp:cash-001}:version")
+
+    def test_balance_and_version_keys_share_cluster_hash_tag(self):
+        client = MagicMock()
+        cache = RedisBalanceCache(redis_client=client)
+        b_key, v_key = cache._get_keys("acme-corp", "cash-001")
+        self.assertIn("{acme-corp:cash-001}", b_key)
+        self.assertIn("{acme-corp:cash-001}", v_key)
+
+    def test_empty_key_scope_is_rejected(self):
+        cache = RedisBalanceCache(redis_client=MagicMock())
+        with self.assertRaises(ValueError):
+            cache.get_balance("", "cash-001")
+
+
+class TestRedisBalanceCacheInputValidation(unittest.TestCase):
+
+    def test_set_balance_rejects_non_integer_amount(self):
+        cache = RedisBalanceCache(redis_client=MagicMock())
+        with self.assertRaises(TypeError):
+            cache.set_balance("tenant-1", "acc-1", 1.5)
+
+    def test_atomic_increment_rejects_non_integer_delta(self):
+        cache = RedisBalanceCache(redis_client=MagicMock())
+        with self.assertRaises(TypeError):
+            cache.atomic_increment_balance("tenant-1", "acc-1", "100")
 
 
 class TestLuaScriptContract(unittest.TestCase):

@@ -146,7 +146,7 @@ pettyflow/
 
 3. **Install Dependencies**:
    ```bash
-   pip install reportlab fpdf2 flake8 mypy
+   pip install -r requirements.txt
    ```
 
 ---
@@ -220,7 +220,7 @@ Run the test suite and benchmark locally using Python's standard `unittest`:
 
 ```bash
 # Run all unit tests and latency benchmarks
-python -m unittest tests/unit/test_double_entry.py -v
+python -m unittest discover -s tests -v
 ```
 
 ### Run Full Pre-Push Verification Check
@@ -267,8 +267,8 @@ python generate_pdf.py
 
 Detailed execution guidelines are documented in [`PETTYFLOW_AI_ROADMAP.md`](PETTYFLOW_AI_ROADMAP.md):
 
-1. **Phase 1 (Weeks 1-3)**: Core Financial Ledger Engine & Cryptographic Hash Chain *(Complete)*
-2. **Phase 2 (Weeks 4-6)**: Multi-Tenant REST/gRPC API & TimescaleDB Data Persistence
+1. **Phase 1 (Weeks 1-2)**: Core Financial Ledger, Cryptographic Hash Chain & Storage Tier *(Complete)*
+2. **Phase 2 (Weeks 3-6)**: Float APIs, Approval Workflows & Data Persistence Integration
 3. **Phase 3 (Weeks 7-9)**: AI OCR Receipt Extraction & Machine Learning Fraud Screening
 4. **Phase 4 (Weeks 10-12)**: Zero-Trust Security, Audit Logging, and Production Hardening
 
