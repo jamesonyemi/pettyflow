@@ -71,7 +71,7 @@ graph TD
 | :--- | :--- | :--- |
 | **Double-Entry Validation** | $< 0.05 \text{ ms}$ | In-memory zero-sum assertion (`TransactionBatch.validate_balance`) |
 | **HMAC-SHA256 Hash Chain** | $< 0.02 \text{ ms}$ / block | Canonical byte formatting & HMAC-SHA256 signing (`CryptographicLedgerChain`) |
-| **Bulk Transaction Engine** | $< 500 \text{ ms}$ / 10k txns | Scaled 64-bit integer engine (Benchmark: **~170 ms**) |
+| **Bulk Transaction Engine** | $< 500 \text{ ms}$ / 10k txns | Scaled 64-bit integer engine; dedicated benchmark target |
 | **Pre-Push Review Check** | $< 1.5 \text{ s}$ | Multi-step syntax, unit test, and PDF compilation check script |
 
 ---
