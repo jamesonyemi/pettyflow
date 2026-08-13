@@ -100,7 +100,9 @@ pettyflow/
 │       └── ci.yml                     # GitHub Actions CI workflow (Python 3.11/3.12)
 ├── scripts/
 │   ├── install_hooks.py              # Git pre-push hook installer
-│   └── pre_push_check.py             # Local CI pre-push review & verification script
+│   ├── pre_push_check.py             # Local CI pre-push review & verification script
+│   ├── push_with_checks.py            # Verify and push with confirmation
+│   └── commit_review.py               # Interactive gitcommit.md commit helper
 ├── src/
 │   └── domain/
 │       └── ledger/
@@ -124,7 +126,7 @@ pettyflow/
 
 ### Prerequisites
 
-- **Python**: `3.11` or `3.12`
+- **Python**: `3.11`–`3.13` (`3.12` preferred; CI validates 3.11 and 3.12)
 - **Git**: `2.30+`
 
 ### Installation
@@ -137,11 +139,19 @@ pettyflow/
 
 2. **Create and Activate a Virtual Environment**:
    ```bash
-   python -m venv venv
+   # Windows PowerShell: Python 3.12 is used by default
+   powershell -ExecutionPolicy Bypass -File .\scripts\setup_venv.ps1
+   .\.venv\Scripts\Activate.ps1
+
+   # To use another supported interpreter instead:
+   powershell -ExecutionPolicy Bypass -File .\scripts\setup_venv.ps1 -Python "C:\path\to\python.exe"
+
+   # Manual equivalent on macOS/Linux:
+   python -m venv .venv
    # On Windows (PowerShell):
-   .\venv\Scripts\Activate.ps1
+   .\.venv\Scripts\Activate.ps1
    # On macOS/Linux:
-   source venv/bin/activate
+   source .venv/bin/activate
    ```
 
 3. **Install Dependencies**:
@@ -283,6 +293,24 @@ python scripts/install_hooks.py
 ```
 
 Once installed, Git will automatically execute `scripts/pre_push_check.py` prior to any `git push`.
+
+To run verification and push in one command, use:
+
+```bash
+python scripts/push_with_checks.py
+```
+
+The command prompts before pushing. Use `--yes` only when you intentionally
+want a non-interactive push. It does not bypass an installed Git pre-push hook.
+
+To review, stage, and commit changes according to [`gitcommit.md`](gitcommit.md):
+
+```bash
+python scripts/commit_review.py
+```
+
+It scans the diff for sensitive-data patterns and asks for confirmation before
+staging or committing anything.
 
 ---
 
