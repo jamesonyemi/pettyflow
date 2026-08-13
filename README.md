@@ -1,7 +1,7 @@
 # PettyFlow 💜
 
 > **Enterprise Petty Cash Management & Cryptographic Ledger Engine**  
-> *Engineered to the Jeff Dean High-Performance Systems Engineering Standard*
+> *Engineered for High-Performance Systems Engineering Standard*
 
 ![PettyFlow CI](https://img.shields.io/badge/CI-Passing-purple?style=for-the-badge&logo=githubactions)
 ![Python Version](https://img.shields.io/badge/Python-3.11%20%7C%203.12-6B21A8?style=for-the-badge&logo=python)
