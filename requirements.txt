@@ -1,0 +1,5 @@
+# PettyFlow Project Dependencies
+reportlab>=4.0.0
+fpdf2>=2.7.0
+flake8>=7.0.0
+mypy>=1.0.0
