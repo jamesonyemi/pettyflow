@@ -15,6 +15,14 @@ class CreateFundRequest(BaseModel):
     custodian_id: UUID
     initial_amount_scaled: int = Field(ge=0)
 
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("name must not be blank")
+        return stripped
+
     @field_validator("currency")
     @classmethod
     def normalize_currency(cls, value: str) -> str:

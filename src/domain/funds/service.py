@@ -114,7 +114,9 @@ class FundService:
     @staticmethod
     def _normalize_currency(currency: str) -> str:
         normalized = currency.upper()
-        if len(normalized) != 3 or not normalized.isalpha():
+        if len(normalized) != 3:
+            raise ValueError("currency must be a three-letter ISO-4217 code")
+        if not all(c.isascii() and c.isalpha() for c in normalized):
             raise ValueError("currency must be a three-letter ISO-4217 code")
         return normalized
 
@@ -124,3 +126,6 @@ class FundService:
             raise TypeError(f"{name} must be an integer")
         if amount_scaled < 0 or (amount_scaled == 0 and not allow_zero):
             raise ValueError(f"{name} must be {'non-negative' if allow_zero else 'positive'}")
+        max_int64 = 2**63 - 1
+        if amount_scaled > max_int64:
+            raise ValueError(f"{name} must not exceed protobuf int64 maximum ({max_int64})")
