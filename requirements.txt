@@ -6,3 +6,7 @@ mypy>=1.0.0
 SQLAlchemy>=2.0.0
 asyncpg>=0.29.0
 redis>=5.0.0
+fastapi>=0.115.0
+uvicorn>=0.30.0
+grpcio>=1.66.0
+grpcio-tools>=1.66.0

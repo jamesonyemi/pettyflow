@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package pettyflow.v1;
+
+service FloatService {
+  rpc CreateFund(CreateFundRequest) returns (Fund);
+  rpc AllocateFloat(AllocateFloatRequest) returns (CustodianBalance);
+  rpc IssueDisbursement(IssueDisbursementRequest) returns (CustodianBalance);
+  rpc GetCustodianBalance(GetCustodianBalanceRequest) returns (CustodianBalance);
+}
+
+message Fund {
+  string fund_id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string currency = 4;
+  string custodian_id = 5;
+  int64 available_amount_scaled = 6;
+}
+
+message CustodianBalance {
+  string fund_id = 1;
+  string tenant_id = 2;
+  string custodian_id = 3;
+  string currency = 4;
+  int64 amount_scaled = 5;
+}
+
+message CreateFundRequest {
+  string tenant_id = 1;
+  string name = 2;
+  string currency = 3;
+  string custodian_id = 4;
+  int64 initial_amount_scaled = 5;
+}
+
+message AllocateFloatRequest {
+  string tenant_id = 1;
+  string fund_id = 2;
+  string custodian_id = 3;
+  int64 amount_scaled = 4;
+}
+
+message IssueDisbursementRequest {
+  string tenant_id = 1;
+  string fund_id = 2;
+  string custodian_id = 3;
+  int64 amount_scaled = 4;
+}
+
+message GetCustodianBalanceRequest {
+  string tenant_id = 1;
+  string fund_id = 2;
+  string custodian_id = 3;
+}
