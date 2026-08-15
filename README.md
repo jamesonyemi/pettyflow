@@ -157,16 +157,11 @@ pettyflow/
    source .venv/bin/activate
 
    # Confirm the active environment and install dependencies:
-   python --version
+   python -c "import sys; print(f'Executable: {sys.executable}'); print(f'Activated: {sys.prefix != sys.base_prefix}')"
    python -m pip install -r requirements.txt
    ```
 
    To leave the virtual environment on any platform, run `deactivate`.
-
-3. **Install Dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
 
 ---
 
