@@ -138,21 +138,30 @@ pettyflow/
    ```
 
 2. **Create and Activate a Virtual Environment**:
-   ```bash
+   ```powershell
    # Windows PowerShell: Python 3.12 is used by default
    powershell -ExecutionPolicy Bypass -File .\scripts\setup_venv.ps1
    .\.venv\Scripts\Activate.ps1
 
    # To use another supported interpreter instead:
    powershell -ExecutionPolicy Bypass -File .\scripts\setup_venv.ps1 -Python "C:\path\to\python.exe"
-
-   # Manual equivalent on macOS/Linux:
-   python -m venv .venv
-   # On Windows (PowerShell):
-   .\.venv\Scripts\Activate.ps1
-   # On macOS/Linux:
-   source .venv/bin/activate
    ```
+
+   ```bash
+   # Linux/macOS: use Python 3.12 when available (Python 3.11–3.13 supported)
+   python3.12 -m venv .venv
+   source .venv/bin/activate
+
+   # Or select another supported interpreter explicitly:
+   python3.11 -m venv .venv
+   source .venv/bin/activate
+
+   # Confirm the active environment and install dependencies:
+   python --version
+   python -m pip install -r requirements.txt
+   ```
+
+   To leave the virtual environment on any platform, run `deactivate`.
 
 3. **Install Dependencies**:
    ```bash
