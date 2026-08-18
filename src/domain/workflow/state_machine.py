@@ -15,12 +15,11 @@ the audit chain is never corrupted by out-of-order events.
 
 from __future__ import annotations
 
-import datetime
-from datetime import timezone as _tz
+from datetime import datetime, UTC
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, FrozenSet, List, Optional, Tuple
+from typing import Optional
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -90,7 +89,7 @@ class ApprovalEvent(Enum):
 # Only entries in this table represent valid transitions.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_TRANSITION_TABLE: Dict[Tuple[ApprovalState, ApprovalEvent], ApprovalState] = {
+_TRANSITION_TABLE: dict[tuple[ApprovalState, ApprovalEvent], ApprovalState] = {
     (ApprovalState.DRAFT,     ApprovalEvent.SUBMIT):   ApprovalState.PENDING,
     (ApprovalState.DRAFT,     ApprovalEvent.CANCEL):   ApprovalState.REJECTED,
     (ApprovalState.PENDING,   ApprovalEvent.APPROVE):  ApprovalState.APPROVED,
@@ -99,7 +98,7 @@ _TRANSITION_TABLE: Dict[Tuple[ApprovalState, ApprovalEvent], ApprovalState] = {
 }
 
 # States from which no further transitions are possible
-_TERMINAL_STATES: FrozenSet[ApprovalState] = frozenset({
+_TERMINAL_STATES: frozenset[ApprovalState] = frozenset({
     ApprovalState.REJECTED,
     ApprovalState.DISBURSED,
 })
@@ -109,7 +108,7 @@ _TERMINAL_STATES: FrozenSet[ApprovalState] = frozenset({
 # Domain Model
 # ─────────────────────────────────────────────────────────────────────────────
 
-@dataclass
+@dataclass(frozen=True)
 class StateTransitionRecord:
     """Immutable audit record for a single state transition."""
     transition_id: str
@@ -120,7 +119,7 @@ class StateTransitionRecord:
     to_state: ApprovalState
     actor_id: str
     notes: Optional[str]
-    timestamp: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(_tz.utc))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass
@@ -140,9 +139,9 @@ class ApprovalRequest:
     description: str
     required_approval_tier: str = ""
     state: ApprovalState = field(default=ApprovalState.DRAFT)
-    audit_trail: List[StateTransitionRecord] = field(default_factory=list)
-    created_at: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(_tz.utc))
-    updated_at: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(_tz.utc))
+    audit_trail: list[StateTransitionRecord] = field(default_factory=list)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def amount_float(self) -> float:
@@ -168,7 +167,6 @@ class WorkflowStateMachine:
     without external synchronisation.
 
     Performance: All transition lookups are O(1) dictionary operations.
-    A policy evaluation (if attached) adds ≤ 1.5 ms per transition.
     """
 
     def __init__(self, request: ApprovalRequest) -> None:
@@ -242,7 +240,7 @@ class WorkflowStateMachine:
 
         # Mutate state atomically
         self._request.state = to_state
-        self._request.updated_at = datetime.datetime.now(_tz.utc)
+        self._request.updated_at = datetime.now(UTC)
 
         return to_state
 
@@ -279,7 +277,7 @@ class WorkflowStateMachine:
         currency: str,
         description: str,
         request_id: Optional[str] = None,
-    ) -> "WorkflowStateMachine":
+    ) -> WorkflowStateMachine:
         """
         Factory method: create a new ApprovalRequest in DRAFT state
         and wrap it in a WorkflowStateMachine.
@@ -298,7 +296,7 @@ class WorkflowStateMachine:
     # Introspection
     # ------------------------------------------------------------------
 
-    def valid_events(self) -> List[ApprovalEvent]:
+    def valid_events(self) -> list[ApprovalEvent]:
         """Return all events that are valid transitions from the current state."""
         return [
             event

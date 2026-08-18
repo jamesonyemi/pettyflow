@@ -350,6 +350,14 @@ class TestAuditTrailIntegrity(unittest.TestCase):
         after_approve = fsm.request.updated_at
         self.assertGreaterEqual(after_approve, after_submit)
 
+    def test_state_transition_record_is_immutable(self):
+        """StateTransitionRecord must be frozen and reject attribute mutation."""
+        fsm = _make_fsm()
+        fsm.submit("c")
+        record = fsm.request.audit_trail[0]
+        with self.assertRaises(AttributeError):
+            record.actor_id = "attacker"  # type: ignore
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Test Suite 4: FSM Introspection
@@ -509,6 +517,16 @@ class TestPolicyEvaluatorThresholds(unittest.TestCase):
         """Negative amounts must be rejected."""
         with self.assertRaises(ValueError):
             self.evaluator.evaluate("req-bad", -1_000)
+
+    def test_float_amount_raises_type_error(self):
+        """Float amounts must be rejected to prevent floating-point contamination."""
+        with self.assertRaises(TypeError):
+            self.evaluator.evaluate("req-bad", 50.0)  # type: ignore
+
+    def test_bool_amount_raises_type_error(self):
+        """Boolean values must be rejected."""
+        with self.assertRaises(TypeError):
+            self.evaluator.evaluate("req-bad", True)  # type: ignore
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -32,9 +32,9 @@ from typing import List, Optional
 
 _SCALE = 10_000
 
-# Threshold boundaries (inclusive lower bound)
-_TIER_MANAGER_THRESHOLD_SCALED:         int = int(50.00  * _SCALE)   # $50.00  → 500,000
-_TIER_FINANCE_DIRECTOR_THRESHOLD_SCALED: int = int(500.00 * _SCALE)  # $500.00 → 5,000,000
+# Threshold boundaries (inclusive lower bound, stored in base units)
+_TIER_MANAGER_THRESHOLD_SCALED:         int = 50 * _SCALE    # $50.00  → 500,000 base units
+_TIER_FINANCE_DIRECTOR_THRESHOLD_SCALED: int = 500 * _SCALE   # $500.00 → 5,000,000 base units
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -195,6 +195,10 @@ class ApprovalPolicyEvaluator:
             ValueError: If amount_scaled is non-positive (zero or negative amounts
                         are not valid disbursements).
         """
+        if isinstance(amount_scaled, bool) or not isinstance(amount_scaled, int):
+            raise TypeError(
+                f"amount_scaled must be an integer fixed-point value; received {type(amount_scaled).__name__}."
+            )
         if amount_scaled <= 0:
             raise ValueError(
                 f"amount_scaled must be a positive integer; received {amount_scaled}."
