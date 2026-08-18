@@ -41,9 +41,14 @@ def main():
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     os.chdir(repo_root)
 
+    python_bin = sys.executable
+    venv_python = os.path.join(repo_root, ".venv", "Scripts", "python.exe") if os.name == "nt" else os.path.join(repo_root, ".venv", "bin", "python")
+    if os.path.exists(venv_python):
+        python_bin = venv_python
+
     checks = [
-        ("Python Code Syntax & Compilation", [sys.executable, "-m", "compileall", "src", "tests"]),
-        ("Unit Tests & Latency Benchmark", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"]),
+        ("Python Code Syntax & Compilation", [python_bin, "-m", "compileall", "src", "tests"]),
+        ("Unit Tests & Latency Benchmark", [python_bin, "-m", "unittest", "discover", "-s", "tests", "-v"]),
     ]
 
     all_passed = True
