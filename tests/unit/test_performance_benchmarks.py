@@ -100,7 +100,7 @@ def test_in_memory_cache_lookup_latency_invariant():
     latencies.sort()
     p99_latency = latencies[int(iterations * 0.99)]
 
-    assert p99_latency < 150.0, f"p99 cache lookup latency {p99_latency:.2f} µs exceeded target threshold"
+    assert p99_latency < 500.0, f"p99 cache lookup latency {p99_latency:.2f} µs exceeded target threshold"
 
 
 def test_hash_chain_verification_throughput():

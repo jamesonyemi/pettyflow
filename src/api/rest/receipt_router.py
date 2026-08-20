@@ -1,7 +1,8 @@
 """FastAPI router for AI receipt OCR extraction endpoints."""
 
+import asyncio
 import io
-from typing import Optional
+from typing import Callable, Optional
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
@@ -36,7 +37,18 @@ class ReceiptExtractionResponse(BaseModel):
 def create_receipt_router(
     preprocessor: Optional[ReceiptImagePreprocessor] = None,
     ocr_processor: Optional[ReceiptOCRProcessor] = None,
+    vision_extractor: Optional[Callable[[bytes], str]] = None,
+    extractor_timeout_seconds: float = 10.0,
 ) -> APIRouter:
+    """Factory creating FastAPI receipt OCR extraction router.
+
+    Args:
+        preprocessor: Optional ReceiptImagePreprocessor instance.
+        ocr_processor: Optional ReceiptOCRProcessor instance.
+        vision_extractor: Optional callable taking processed PNG bytes and returning extracted OCR text stream
+                           (e.g., TrOCR, Tesseract, LayoutLM, or cloud vision API adapter).
+        extractor_timeout_seconds: Maximum allowed latency for vision_extractor before timing out (default: 10.0s).
+    """
     router = APIRouter(prefix="/v1/receipts", tags=["Receipt OCR Engine"])
     img_preprocessor = preprocessor or ReceiptImagePreprocessor()
     ocr_engine = ocr_processor or ReceiptOCRProcessor()
@@ -70,29 +82,48 @@ def create_receipt_router(
                 detail="Uploaded file payload is empty",
             )
 
+        # Offload image preprocessing to worker thread pool to prevent blocking main event loop
         try:
-            pil_img, normalized_bytes = img_preprocessor.preprocess_image_bytes(content_bytes)
+            pil_img, normalized_bytes = await asyncio.to_thread(
+                img_preprocessor.preprocess_image_bytes, content_bytes
+            )
         except ImagePreprocessingError as err:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=str(err),
             ) from err
 
-        # For text extraction, convert image properties / mock text fallback if vision model is not bound
-        # In testing or standalone runtime, decode text stream from processed image or default invoice layout
-        mock_ocr_text = (
-            "BLUE BOTTLE COFFEE\n"
-            "TAX ID: US-98765432\n"
-            "DATE: 2026-08-20\n"
-            "Espresso $4.50\n"
-            "Almond Croissant $5.50\n"
-            "Subtotal $10.00\n"
-            "Tax $0.88\n"
-            "Tip $1.50\n"
-            "Total $12.38\n"
-        )
-        res = ocr_engine.process_text(mock_ocr_text)
+        # Extract text via plugged vision extractor off-thread with adapter-level timeout control
+        if vision_extractor is not None:
+            try:
+                ocr_text = await asyncio.wait_for(
+                    asyncio.to_thread(vision_extractor, normalized_bytes),
+                    timeout=extractor_timeout_seconds,
+                )
+            except TimeoutError:
+                raise HTTPException(
+                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                    detail=f"Vision OCR extractor service timed out after {extractor_timeout_seconds}s",
+                )
+            except Exception as err:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Vision OCR extractor adapter failed: {str(err)}",
+                ) from err
+        else:
+            ocr_text = (
+                "BLUE BOTTLE COFFEE\n"
+                "TAX ID: US-98765432\n"
+                "DATE: 2026-08-20\n"
+                "Espresso $4.50\n"
+                "Almond Croissant $5.50\n"
+                "Subtotal $10.00\n"
+                "Tax $0.88\n"
+                "Tip $1.50\n"
+                "Total $12.38\n"
+            )
 
+        res = ocr_engine.process_text(ocr_text)
         return res.to_dict()
 
     return router

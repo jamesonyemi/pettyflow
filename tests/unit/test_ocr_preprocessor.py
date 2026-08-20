@@ -35,3 +35,17 @@ def test_preprocessor_valid_png_processing():
     assert len(processed_bytes) > 0
     # Dimension should be resized to max 512 maintaining aspect ratio
     assert max(processed_img.size) <= 512
+
+
+def test_preprocessor_excessive_dimensions_rejected():
+    # Set low max_pixels threshold (e.g. 100,000 pixels)
+    preprocessor = ReceiptImagePreprocessor(max_pixels=100_000)
+
+    # Create 500x500 image = 250,000 pixels
+    img = Image.new("RGB", (500, 500), color="white")
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG")
+    raw_bytes = buffer.getvalue()
+
+    with pytest.raises(ImagePreprocessingError, match="exceed maximum limit"):
+        preprocessor.preprocess_image_bytes(raw_bytes)
