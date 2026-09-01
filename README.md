@@ -50,29 +50,52 @@ At its core, PettyFlow guarantees **zero-sum double-entry balance invariants** a
 
 ## 📐 System Architecture & Data Flow
 
-PettyFlow processes financial transactions through a strict multi-layer verification pipeline:
+PettyFlow routes every disbursement request through a strict, multi-layer verification pipeline before funds are released:
 
 ```mermaid
 graph TD
-    A["Financial Transaction Batch"] --> B["Fixed-Point Scaling Math (SCALE_FACTOR=10,000)"]
-    B --> C["Double-Entry Balance Validation (sum Debits == sum Credits)"]
-    C -- "Unbalanced" --> D["Raise UnbalancedLedgerEntryException"]
-    C -- "Valid" --> E["Canonical Payload Serialization"]
-    E --> F["HMAC-SHA256 Signature Computation (Tenant Key)"]
-    F --> G["Append Block to Ledger Hash Chain"]
-    G --> H["Verify Chain Integrity (Previous Hash Match & Block Digest)"]
-    H -- "Corrupted" --> I["Raise ChainTamperedException"]
-    H -- "Valid" --> J["Committed Ledger Block"]
+    A["REST API Request\n(FloatRouter + JWTVerifier)"] --> B["Zero-Trust Tenant Boundary Check\n(JWT tenant_id == request tenant_id)"]
+    B -- "Mismatch" --> R1["HTTP 401 Unauthorized"]
+    B -- "Valid" --> C["Fraud Pre-Screen\n(FraudRiskScorer: dHash · split-tx · z-score · velocity)"]
+    C -- "Score >= 50\n(HIGH / CRITICAL)" --> R2["HTTP 409 FRAUD_BLOCK\nWORM audit sealed"]
+    C -- "Score < 50\n(LOW / MEDIUM)" --> D["Approval Policy Evaluation\n(PolicyEvaluator — fixed-point thresholds)"]
+    D --> E["Workflow State Machine\n(WorkflowFSM: DRAFT -> PENDING -> APPROVED -> DISBURSED)"]
+    E --> F["Float Deduction\n(FundService RLock + Redis Lua atomic decrement)"]
+    F --> G["Double-Entry Ledger Commit\n(TransactionBatch.validate_balance + HMAC hash chain append)"]
+    G -- "Unbalanced" --> R3["Raise UnbalancedLedgerEntryException"]
+    G -- "Valid & Signed" --> H["Wallet Disbursement\n(DisbursementManager: Virtual Card · Mobile Money · ACH)"]
+    H --> I["ERP Sync\n(SAPAdapter / NetSuiteAdapter — ISO 20022 pain.001)"]
+    I --> J["WORM Audit Seal\n(TamperLog HMAC chain — append-only)"]
+    J --> K["HTTP 200 Disbursed"]
 ```
+
+### Approval Tier Decision
+
+```mermaid
+flowchart LR
+    A["amount_scaled\n(64-bit int x 10,000)"] --> B{"< 500,000\nunder $50"}
+    A --> C{"500,000 to 4,999,999\n$50 to $499.99"}
+    A --> D{">= 5,000,000\n$500 and above"}
+    B --> E["AUTO_APPROVE\nNo human required"]
+    C --> F["MANAGER\nLine manager sign-off"]
+    D --> G["FINANCE_DIRECTOR\nCFO-level authority"]
+```
+
+> 📄 **Full end-to-end sequence diagram** (all 13 participants, happy path + fraud block + rejection alternates): [`docs/diagrams/e2e_disbursement_flow.md`](docs/diagrams/e2e_disbursement_flow.md)
 
 ### Latency Budget & System Invariants
 
-| Layer / Operation | Target Latency Budget | Technology / Implementation |
+| Layer / Operation | Target | Implementation |
 | :--- | :--- | :--- |
-| **Double-Entry Validation** | $< 0.05 \text{ ms}$ | In-memory zero-sum assertion (`TransactionBatch.validate_balance`) |
-| **HMAC-SHA256 Hash Chain** | $< 0.02 \text{ ms}$ / block | Canonical byte formatting & HMAC-SHA256 signing (`CryptographicLedgerChain`) |
-| **Bulk Transaction Engine** | $< 500 \text{ ms}$ / 10k txns | Scaled 64-bit integer engine; dedicated benchmark target |
-| **Pre-Push Review Check** | $< 1.5 \text{ s}$ | Multi-step syntax, unit test, and PDF compilation check script |
+| **JWT tenant boundary check** | — | `JWTVerifier.validate_tenant_boundary` |
+| **Fraud risk score (4 signals)** | — | `FraudRiskScorer.score` |
+| **Policy evaluation** | < 1.5 ms p99 | `PolicyEvaluator.evaluate` — O(n) rule scan, n=3 |
+| **FSM state transition** | < 1 ms p99 | `WorkflowStateMachine.transition` — O(1) dict lookup |
+| **Redis Lua atomic balance** | < 50 µs p99 | `RedisBalanceCache.atomic_increment_balance` |
+| **Double-entry ledger commit** | < 2 ms p99 | `TransactionBatch.validate_balance` + HMAC append |
+| **Virtual card creation** | < 800 ms | `CardIssuerAdapter.create_virtual_card` |
+| **End-to-end API (read)** | < 10 ms p99 | Roadmap Section 0 invariant |
+| **Bulk throughput** | < 500 ms / 10k txns | Benchmark: `test_10k_transactions_benchmark` |
 
 ---
 
