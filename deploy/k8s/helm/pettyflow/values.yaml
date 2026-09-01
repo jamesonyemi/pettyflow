@@ -1,0 +1,74 @@
+# Default values for pettyflow Helm chart.
+replicaCount: 5
+
+image:
+  repository: pettyflow/api
+  pullPolicy: IfNotPresent
+  tag: "1.0.0"
+
+serviceAccount:
+  create: true
+  name: "pettyflow-sa"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  httpPort: 8000
+  grpcPort: 50051
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+  hosts:
+    - host: api.pettyflow.io
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: pettyflow-api-tls
+      hosts:
+        - api.pettyflow.io
+
+resources:
+  limits:
+    cpu: "2000m"
+    memory: "2Gi"
+  requests:
+    cpu: "500m"
+    memory: "512Mi"
+
+autoscaling:
+  enabled: true
+  minReplicas: 5
+  maxReplicas: 50
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: "80%"
+
+env:
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "INFO"
+  DB_POOL_SIZE: "20"
+  DB_MAX_OVERFLOW: "10"
+  REDIS_CLUSTER_URL: "redis://redis-cluster.pettyflow.svc:6379"
+  DATABASE_URL_SECRET: "pettyflow-db-credentials"
+  KMS_MASTER_KEY_SECRET: "pettyflow-kms-master-key"

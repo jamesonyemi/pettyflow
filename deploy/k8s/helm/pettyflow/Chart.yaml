@@ -1,0 +1,9 @@
+apiVersion: v2
+name: pettyflow
+description: Production-grade Helm chart for PettyFlow Enterprise Cryptographic Petty Cash Ledger
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+maintainers:
+  - name: PettyFlow Engineering Team
+    email: engineering@pettyflow.internal
