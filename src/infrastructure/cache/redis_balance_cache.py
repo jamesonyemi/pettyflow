@@ -53,6 +53,21 @@ class RedisBalanceCache:
         self.client = redis_client
         self._script_sha = None
 
+    @staticmethod
+    def _coerce_int(raw_value: Any, field_name: str) -> int:
+        if raw_value is None:
+            raise ValueError(f"{field_name} cannot be None.")
+        if isinstance(raw_value, (bytes, bytearray)):
+            raw_value = raw_value.decode("utf-8")
+        if isinstance(raw_value, str):
+            raw_value = raw_value.strip()
+            if not raw_value:
+                raise ValueError(f"{field_name} cannot be empty.")
+        try:
+            return int(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field_name} is not an integer-typed Redis value: {raw_value!r}") from exc
+
     def _get_keys(self, tenant_id: str, account_id: str) -> Tuple[str, str]:
         """Return co-located Redis Cluster keys for an account balance."""
         if not tenant_id or not account_id:
@@ -80,8 +95,8 @@ class RedisBalanceCache:
         if raw_balance is None:
             return None
 
-        balance = int(raw_balance)
-        version = int(raw_version) if raw_version is not None else 1
+        balance = self._coerce_int(raw_balance, "balance")
+        version = self._coerce_int(raw_version, "version") if raw_version is not None else 1
         return balance, version
 
     def set_balance(self, tenant_id: str, account_id: str, amount_scaled: int, version_id: int = 1) -> bool:
@@ -117,7 +132,7 @@ class RedisBalanceCache:
             raise TypeError("expected_version must be an integer")
 
         b_key, v_key = self._get_keys(tenant_id, account_id)
-        
+
         # Execute Lua script
         result = self.client.eval(
             ATOMIC_BALANCE_MUTATION_LUA,
@@ -128,8 +143,11 @@ class RedisBalanceCache:
             str(expected_version)
         )
 
-        status_code = result[0]
-        payload = result[1]
+        if not isinstance(result, (list, tuple)) or len(result) < 2:
+            raise ValueError(f"Unexpected Redis Lua response for account {account_id}: {result!r}")
+
+        status_code = self._coerce_int(result[0], "status_code")
+        payload = self._coerce_int(result[1], "payload")
 
         if status_code == -1:
             raise OptimisticLockException(
@@ -142,7 +160,7 @@ class RedisBalanceCache:
                 f"Current balance is {payload}, attempted delta {delta_scaled}"
             )
 
-        return int(status_code), int(payload)
+        return status_code, payload
 
     def invalidate_cache(self, tenant_id: str, account_id: str) -> bool:
         """Evict cached balance and version keys."""

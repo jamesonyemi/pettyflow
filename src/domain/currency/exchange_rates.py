@@ -22,6 +22,23 @@ RATE_SCALE = 1_000_000        # 10^6 for micro-precision exchange rates
 AMOUNT_SCALE = 10_000         # 10^4 for standard 64-bit integer money units
 
 
+def _normalize_currency_code(currency: str, field_name: str) -> str:
+    if not isinstance(currency, str):
+        raise TypeError(f"{field_name} must be a string ISO-4217 code.")
+    normalized = currency.strip().upper()
+    if len(normalized) != 3 or not normalized.isalpha():
+        raise ValueError(f"{field_name} must be a three-letter ISO-4217 code.")
+    return normalized
+
+
+def _validate_positive_rate(rate: float, field_name: str = "rate") -> float:
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)):
+        raise TypeError(f"{field_name} must be a numeric rate.")
+    if rate <= 0:
+        raise ValueError(f"{field_name} must be greater than zero.")
+    return float(rate)
+
+
 @dataclass(frozen=True)
 class ExchangeRateRecord:
     """Historical spot rate record."""
@@ -61,14 +78,15 @@ class CurrencyConverter:
         source: str = "ECB",
     ) -> None:
         """Register a spot exchange rate."""
-        base = base_currency.upper()
-        quote = quote_currency.upper()
+        base = _normalize_currency_code(base_currency, "base_currency")
+        quote = _normalize_currency_code(quote_currency, "quote_currency")
+        rate = _validate_positive_rate(rate, "rate")
         date_str = effective_date or datetime.date.today().isoformat()
         scaled_rate = int(round(rate * RATE_SCALE))
 
         self._rates[(base, quote, date_str)] = scaled_rate
         # Store inverse rate using integer arithmetic
-        if rate > 0 and scaled_rate > 0:
+        if scaled_rate > 0:
             inv_rate = (RATE_SCALE * RATE_SCALE + (scaled_rate // 2)) // scaled_rate
             self._rates[(quote, base, date_str)] = inv_rate
 
@@ -79,8 +97,8 @@ class CurrencyConverter:
         date_str: Optional[str] = None,
     ) -> int:
         """Retrieve rate scaled x10^6. Computes triangular cross-rate via USD if direct rate missing."""
-        from_curr = from_currency.upper()
-        to_curr = to_currency.upper()
+        from_curr = _normalize_currency_code(from_currency, "from_currency")
+        to_curr = _normalize_currency_code(to_currency, "to_currency")
         dt = date_str or datetime.date.today().isoformat()
 
         if from_curr == to_curr:
@@ -88,7 +106,10 @@ class CurrencyConverter:
 
         # Direct lookup for the exact date
         if (from_curr, to_curr, dt) in self._rates:
-            return self._rates[(from_curr, to_curr, dt)]
+            rate = self._rates[(from_curr, to_curr, dt)]
+            if rate <= 0:
+                raise CurrencyConversionError(f"Stored exchange rate for {from_curr}/{to_curr} is invalid.")
+            return rate
 
         # Fallback to latest available date on or prior to dt
         matching = [
@@ -98,13 +119,21 @@ class CurrencyConverter:
         if matching:
             prior_rates = [item for item in matching if item[0] <= dt]
             if prior_rates:
-                return max(prior_rates, key=lambda x: x[0])[1]
-            return min(matching, key=lambda x: x[0])[1]
+                selected = max(prior_rates, key=lambda x: x[0])
+                if selected[1] <= 0:
+                    raise CurrencyConversionError(f"Stored exchange rate for {from_curr}/{to_curr} is invalid.")
+                return selected[1]
+            selected = min(matching, key=lambda x: x[0])
+            if selected[1] <= 0:
+                raise CurrencyConversionError(f"Stored exchange rate for {from_curr}/{to_curr} is invalid.")
+            return selected[1]
 
         # Triangular cross-rate via USD
         if from_curr != "USD" and to_curr != "USD":
             rate_from_usd = self.get_rate_scaled(from_curr, "USD", dt)
             rate_usd_to = self.get_rate_scaled("USD", to_curr, dt)
+            if rate_from_usd <= 0 or rate_usd_to <= 0:
+                raise CurrencyConversionError(f"Invalid cross-rate for {from_curr}/{to_curr} on date {dt}.")
             # Cross rate = (rate_from_usd * rate_usd_to + (RATE_SCALE // 2)) // RATE_SCALE
             return (rate_from_usd * rate_usd_to + (RATE_SCALE // 2)) // RATE_SCALE
 

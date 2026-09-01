@@ -74,6 +74,19 @@ class PolicyRule:
     required_tier: ApprovalTier
     rule_name: str
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.min_amount_scaled, int) or isinstance(self.min_amount_scaled, bool):
+            raise TypeError("min_amount_scaled must be an integer fixed-point value.")
+        if self.min_amount_scaled <= 0:
+            raise ValueError("min_amount_scaled must be strictly positive.")
+        if self.max_amount_scaled is not None:
+            if not isinstance(self.max_amount_scaled, int) or isinstance(self.max_amount_scaled, bool):
+                raise TypeError("max_amount_scaled must be an integer fixed-point value or None.")
+            if self.max_amount_scaled <= self.min_amount_scaled:
+                raise ValueError("max_amount_scaled must be greater than min_amount_scaled.")
+        if not self.rule_name or not str(self.rule_name).strip():
+            raise ValueError("rule_name must be a non-empty string.")
+
     def matches(self, amount_scaled: int) -> bool:
         """Return True if amount_scaled falls within this rule's range."""
         if amount_scaled < self.min_amount_scaled:
@@ -165,12 +178,21 @@ class ApprovalPolicyEvaluator:
             rules: Ordered list of PolicyRule objects (ascending by threshold).
                    Defaults to DEFAULT_PETTYFLOW_POLICY if not provided.
         """
-        self._rules: List[PolicyRule] = sorted(
-            rules if rules is not None else DEFAULT_PETTYFLOW_POLICY,
-            key=lambda r: r.min_amount_scaled,
-        )
-        if not self._rules:
+        candidate_rules = list(rules if rules is not None else DEFAULT_PETTYFLOW_POLICY)
+        if not candidate_rules:
             raise ValueError("ApprovalPolicyEvaluator requires at least one PolicyRule.")
+
+        self._rules: List[PolicyRule] = sorted(candidate_rules, key=lambda r: r.min_amount_scaled)
+
+        for idx, rule in enumerate(self._rules):
+            if idx == 0:
+                continue
+            prev = self._rules[idx - 1]
+            if prev.max_amount_scaled is not None and rule.min_amount_scaled < prev.max_amount_scaled:
+                raise ValueError(
+                   "ApprovalPolicyEvaluator requires non-overlapping policy ranges; "
+                   f"rule '{prev.rule_name}' overlaps '{rule.rule_name}'."
+                )
 
     # ------------------------------------------------------------------
     # Core Evaluation
