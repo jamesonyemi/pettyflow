@@ -96,6 +96,10 @@ class PolicyRule:
         return True
 
 
+class PolicyConfigurationError(ValueError):
+    """Raised when an approval policy is invalid or ambiguous."""
+
+
 @dataclass(frozen=True)
 class PolicyEvaluationResult:
     """
@@ -107,6 +111,7 @@ class PolicyEvaluationResult:
     matching_rule: str
     auto_approved: bool
     evaluation_duration_us: float   # Microseconds; target < 1,500 µs (1.5 ms)
+    is_fallback: bool = False
 
     @property
     def amount_float(self) -> float:
@@ -115,11 +120,12 @@ class PolicyEvaluationResult:
     def __str__(self) -> str:
         tier_label = self.required_tier.value
         auto = " [AUTO-APPROVED]" if self.auto_approved else ""
+        fallback = " [FALLBACK]" if self.is_fallback else ""
         return (
             f"PolicyEvaluationResult("
             f"request={self.request_id!r}, "
             f"amount=${self.amount_float:.2f}, "
-            f"tier={tier_label}{auto}, "
+            f"tier={tier_label}{auto}{fallback}, "
             f"rule={self.matching_rule!r}, "
             f"eval_time={self.evaluation_duration_us:.1f}µs)"
         )
@@ -185,13 +191,21 @@ class ApprovalPolicyEvaluator:
         self._rules: List[PolicyRule] = sorted(candidate_rules, key=lambda r: r.min_amount_scaled)
 
         for idx, rule in enumerate(self._rules):
+            if rule.min_amount_scaled <= 0:
+                raise PolicyConfigurationError(
+                    f"Rule '{rule.rule_name}' has a non-positive minimum threshold."
+                )
+            if rule.max_amount_scaled is not None and rule.max_amount_scaled <= rule.min_amount_scaled:
+                raise PolicyConfigurationError(
+                    f"Rule '{rule.rule_name}' defines an invalid range: max must be greater than min."
+                )
             if idx == 0:
                 continue
             prev = self._rules[idx - 1]
             if prev.max_amount_scaled is not None and rule.min_amount_scaled < prev.max_amount_scaled:
                 raise ValueError(
-                   "ApprovalPolicyEvaluator requires non-overlapping policy ranges; "
-                   f"rule '{prev.rule_name}' overlaps '{rule.rule_name}'."
+                    "ApprovalPolicyEvaluator requires non-overlapping policy ranges; "
+                    f"rule '{prev.rule_name}' overlaps '{rule.rule_name}'."
                 )
 
     # ------------------------------------------------------------------
@@ -236,6 +250,7 @@ class ApprovalPolicyEvaluator:
 
         # Fallback: if no rule matches (e.g., custom policy with gaps),
         # apply the highest-authority tier as a safe default.
+        fallback_used = False
         if matched_rule is None:
             matched_rule = PolicyRule(
                 min_amount_scaled=amount_scaled,
@@ -243,6 +258,7 @@ class ApprovalPolicyEvaluator:
                 required_tier=ApprovalTier.FINANCE_DIRECTOR,
                 rule_name="PETTYFLOW-POLICY-FALLBACK: Finance Director (no rule matched)",
             )
+            fallback_used = True
 
         t_end = time.perf_counter_ns()
         duration_us = (t_end - t_start) / 1_000.0
@@ -254,6 +270,7 @@ class ApprovalPolicyEvaluator:
             matching_rule=matched_rule.rule_name,
             auto_approved=(matched_rule.required_tier == ApprovalTier.AUTO_APPROVE),
             evaluation_duration_us=duration_us,
+            is_fallback=fallback_used,
         )
 
     def is_actor_authorized(

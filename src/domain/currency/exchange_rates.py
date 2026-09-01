@@ -115,8 +115,14 @@ class CurrencyConverter:
         base = _normalize_currency_code(base_currency, "base_currency")
         quote = _normalize_currency_code(quote_currency, "quote_currency")
         rate = _validate_positive_rate(rate, "rate")
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError("source must be a non-empty string.")
         date_str = effective_date or datetime.date.today().isoformat()
+        if len(date_str) != 10:
+            raise ValueError("effective_date must be YYYY-MM-DD format.")
         scaled_rate = int(round(rate * RATE_SCALE))
+        if scaled_rate <= 0:
+            raise CurrencyConversionError(f"Exchange rate for {base}/{quote} must be positive after scaling.")
 
         self._rates[(base, quote, date_str)] = scaled_rate
         self._index_rate(base, quote, date_str, scaled_rate)
@@ -188,10 +194,18 @@ class CurrencyConverter:
         Formula:
             converted_scaled = (amount_scaled * rate_scaled + (RATE_SCALE // 2)) // RATE_SCALE
         """
-        if from_currency.upper() == to_currency.upper():
+        if not isinstance(amount_scaled, int) or isinstance(amount_scaled, bool):
+            raise TypeError("amount_scaled must be an integer fixed-point value.")
+        if amount_scaled < 0:
+            raise ValueError("amount_scaled must be non-negative.")
+        from_curr = _normalize_currency_code(from_currency, "from_currency")
+        to_curr = _normalize_currency_code(to_currency, "to_currency")
+        if from_curr == to_curr:
             return amount_scaled
 
-        rate_scaled = self.get_rate_scaled(from_currency, to_currency, date_str)
+        rate_scaled = self.get_rate_scaled(from_curr, to_curr, date_str)
+        if rate_scaled <= 0:
+            raise CurrencyConversionError(f"Exchange rate for {from_curr}/{to_curr} must be positive.")
         # Fixed point integer multiplication and round-half-up division
         return (amount_scaled * rate_scaled + (RATE_SCALE // 2)) // RATE_SCALE
 
@@ -208,6 +222,10 @@ class CurrencyConverter:
         Returns:
             (historical_base_amount_scaled, current_base_amount_scaled, fx_gain_loss_scaled)
         """
+        if not isinstance(amount_scaled, int) or isinstance(amount_scaled, bool):
+            raise TypeError("amount_scaled must be an integer fixed-point value.")
+        if amount_scaled < 0:
+            raise ValueError("amount_scaled must be non-negative.")
         curr_dt = current_date or datetime.date.today().isoformat()
         hist_val = self.convert(amount_scaled, from_currency, base_currency, historical_date)
         curr_val = self.convert(amount_scaled, from_currency, base_currency, curr_dt)

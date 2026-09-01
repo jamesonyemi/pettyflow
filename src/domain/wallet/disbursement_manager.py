@@ -61,6 +61,12 @@ class FloatDisbursementRequest:
     metadata: Dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if not self.tenant_id or not str(self.tenant_id).strip():
+            raise ValueError("tenant_id cannot be empty")
+        if not self.custodian_id or not str(self.custodian_id).strip():
+            raise ValueError("custodian_id cannot be empty")
+        if not self.fund_id or not str(self.fund_id).strip():
+            raise ValueError("fund_id cannot be empty")
         if self.amount_scaled <= 0:
             raise ValueError(f"amount_scaled must be positive, got {self.amount_scaled}")
         if not self.idempotency_key:
@@ -133,12 +139,31 @@ class DisbursementManager:
         self,
         card_issuer: Optional[CardIssuerAdapter] = None,
         mobile_adapter: Optional[MobileMoneyAdapter] = None,
+        idempotency_ttl_seconds: int = 86_400,
     ):
         self._card_issuer = card_issuer or CardIssuerAdapter(CardIssuerBackend.MOCK)
         self._mobile_adapter = mobile_adapter or MobileMoneyAdapter(MobileMoneyBackend.MOCK)
-        # Idempotency store: idempotency_key -> FloatDisbursementResult
-        self._results: Dict[str, FloatDisbursementResult] = {}
+        if idempotency_ttl_seconds <= 0:
+            raise ValueError("idempotency_ttl_seconds must be positive")
+        self._idempotency_ttl_seconds = idempotency_ttl_seconds
+        # Idempotency store: idempotency_key -> (FloatDisbursementResult, expires_at)
+        self._results: Dict[str, tuple[FloatDisbursementResult, datetime.datetime]] = {}
         self._audit_trail: List[FloatDisbursementResult] = []
+
+    def _prune_expired_idempotency_keys(self) -> None:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        expired_keys = [
+            key for key, (_, expiry) in self._results.items() if expiry <= now
+        ]
+        for key in expired_keys:
+            self._results.pop(key, None)
+
+    def _record_idempotent_result(self, request: FloatDisbursementRequest, result: FloatDisbursementResult) -> None:
+        expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
+            seconds=self._idempotency_ttl_seconds
+        )
+        self._results[request.idempotency_key] = (result, expires_at)
+        self._audit_trail.append(result)
 
     def disburse_float(
         self, request: FloatDisbursementRequest
@@ -153,10 +178,13 @@ class DisbursementManager:
         Returns:
             FloatDisbursementResult with channel-specific payload and status.
         """
-        # Idempotency check — prevent double-issuance
+        if not isinstance(request, FloatDisbursementRequest):
+            raise TypeError("request must be a FloatDisbursementRequest")
+
+        self._prune_expired_idempotency_keys()
         cached = self._results.get(request.idempotency_key)
         if cached is not None:
-            return cached
+            return cached[0]
 
         disbursement_id = f"fdisb_{uuid.uuid4().hex[:16]}"
         now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -168,8 +196,7 @@ class DisbursementManager:
         else:
             raise ValueError(f"Unknown disbursement channel: {request.channel}")
 
-        self._results[request.idempotency_key] = result
-        self._audit_trail.append(result)
+        self._record_idempotent_result(request, result)
         return result
 
     def _disburse_via_card(
