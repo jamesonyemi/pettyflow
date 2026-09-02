@@ -10,6 +10,7 @@ Implements micro-precision fixed-point currency conversion with triangular arbit
 from __future__ import annotations
 
 import datetime
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -68,6 +69,39 @@ class CurrencyConverter:
     def __init__(self):
         # (base_currency, quote_currency, effective_date) -> rate_scaled
         self._rates: Dict[Tuple[str, str, str], int] = {}
+        # (base_currency, quote_currency) -> sorted list of (effective_date, rate_scaled)
+        self._rate_index: Dict[Tuple[str, str], List[Tuple[str, int]]] = {}
+        # Memoize resolved rates for repeated queries in reporting/analytics loops
+        self._rate_cache: Dict[Tuple[str, str, str], int] = {}
+
+    def _index_rate(self, base: str, quote: str, date_str: str, rate: int) -> None:
+        pair = (base, quote)
+        entries = self._rate_index.setdefault(pair, [])
+        for index, (existing_date, _) in enumerate(entries):
+            if existing_date == date_str:
+                entries[index] = (date_str, rate)
+                entries.sort(key=lambda item: item[0])
+                return
+        entries.append((date_str, rate))
+        entries.sort(key=lambda item: item[0])
+
+    def _lookup_indexed_rate(self, base: str, quote: str, date_str: str) -> Optional[int]:
+        entries = self._rate_index.get((base, quote), [])
+        if not entries:
+            return None
+
+        dates = [item[0] for item in entries]
+        index = bisect_right(dates, date_str) - 1
+        if index >= 0:
+            selected_rate = entries[index][1]
+            if selected_rate <= 0:
+                raise CurrencyConversionError(f"Stored exchange rate for {base}/{quote} is invalid.")
+            return selected_rate
+
+        earliest_rate = entries[0][1]
+        if earliest_rate <= 0:
+            raise CurrencyConversionError(f"Stored exchange rate for {base}/{quote} is invalid.")
+        return earliest_rate
 
     def set_rate(
         self,
@@ -81,14 +115,25 @@ class CurrencyConverter:
         base = _normalize_currency_code(base_currency, "base_currency")
         quote = _normalize_currency_code(quote_currency, "quote_currency")
         rate = _validate_positive_rate(rate, "rate")
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError("source must be a non-empty string.")
         date_str = effective_date or datetime.date.today().isoformat()
+        if len(date_str) != 10:
+            raise ValueError("effective_date must be YYYY-MM-DD format.")
         scaled_rate = int(round(rate * RATE_SCALE))
+        if scaled_rate <= 0:
+            raise CurrencyConversionError(f"Exchange rate for {base}/{quote} must be positive after scaling.")
 
         self._rates[(base, quote, date_str)] = scaled_rate
-        # Store inverse rate using integer arithmetic
+        self._index_rate(base, quote, date_str, scaled_rate)
+
+        # Store inverse rate using integer arithmetic for faster reverse lookups.
         if scaled_rate > 0:
             inv_rate = (RATE_SCALE * RATE_SCALE + (scaled_rate // 2)) // scaled_rate
             self._rates[(quote, base, date_str)] = inv_rate
+            self._index_rate(quote, base, date_str, inv_rate)
+
+        self._rate_cache.clear()
 
     def get_rate_scaled(
         self,
@@ -104,38 +149,34 @@ class CurrencyConverter:
         if from_curr == to_curr:
             return RATE_SCALE
 
-        # Direct lookup for the exact date
+        cache_key = (from_curr, to_curr, dt)
+        if cache_key in self._rate_cache:
+            return self._rate_cache[cache_key]
+
+        # Direct lookup for the exact date.
         if (from_curr, to_curr, dt) in self._rates:
             rate = self._rates[(from_curr, to_curr, dt)]
             if rate <= 0:
                 raise CurrencyConversionError(f"Stored exchange rate for {from_curr}/{to_curr} is invalid.")
+            self._rate_cache[cache_key] = rate
             return rate
 
-        # Fallback to latest available date on or prior to dt
-        matching = [
-            (d, rate) for (b, q, d), rate in self._rates.items()
-            if b == from_curr and q == to_curr
-        ]
-        if matching:
-            prior_rates = [item for item in matching if item[0] <= dt]
-            if prior_rates:
-                selected = max(prior_rates, key=lambda x: x[0])
-                if selected[1] <= 0:
-                    raise CurrencyConversionError(f"Stored exchange rate for {from_curr}/{to_curr} is invalid.")
-                return selected[1]
-            selected = min(matching, key=lambda x: x[0])
-            if selected[1] <= 0:
-                raise CurrencyConversionError(f"Stored exchange rate for {from_curr}/{to_curr} is invalid.")
-            return selected[1]
+        # Historical lookup uses a sorted pair index to avoid scanning the full rate table.
+        indexed_rate = self._lookup_indexed_rate(from_curr, to_curr, dt)
+        if indexed_rate is not None:
+            self._rate_cache[cache_key] = indexed_rate
+            return indexed_rate
 
-        # Triangular cross-rate via USD
+        # Triangular cross-rate via USD.
         if from_curr != "USD" and to_curr != "USD":
             rate_from_usd = self.get_rate_scaled(from_curr, "USD", dt)
             rate_usd_to = self.get_rate_scaled("USD", to_curr, dt)
             if rate_from_usd <= 0 or rate_usd_to <= 0:
                 raise CurrencyConversionError(f"Invalid cross-rate for {from_curr}/{to_curr} on date {dt}.")
             # Cross rate = (rate_from_usd * rate_usd_to + (RATE_SCALE // 2)) // RATE_SCALE
-            return (rate_from_usd * rate_usd_to + (RATE_SCALE // 2)) // RATE_SCALE
+            rate = (rate_from_usd * rate_usd_to + (RATE_SCALE // 2)) // RATE_SCALE
+            self._rate_cache[cache_key] = rate
+            return rate
 
         raise CurrencyConversionError(
             f"No exchange rate found for pair {from_curr}/{to_curr} on date {dt}"
@@ -153,10 +194,18 @@ class CurrencyConverter:
         Formula:
             converted_scaled = (amount_scaled * rate_scaled + (RATE_SCALE // 2)) // RATE_SCALE
         """
-        if from_currency.upper() == to_currency.upper():
+        if not isinstance(amount_scaled, int) or isinstance(amount_scaled, bool):
+            raise TypeError("amount_scaled must be an integer fixed-point value.")
+        if amount_scaled < 0:
+            raise ValueError("amount_scaled must be non-negative.")
+        from_curr = _normalize_currency_code(from_currency, "from_currency")
+        to_curr = _normalize_currency_code(to_currency, "to_currency")
+        if from_curr == to_curr:
             return amount_scaled
 
-        rate_scaled = self.get_rate_scaled(from_currency, to_currency, date_str)
+        rate_scaled = self.get_rate_scaled(from_curr, to_curr, date_str)
+        if rate_scaled <= 0:
+            raise CurrencyConversionError(f"Exchange rate for {from_curr}/{to_curr} must be positive.")
         # Fixed point integer multiplication and round-half-up division
         return (amount_scaled * rate_scaled + (RATE_SCALE // 2)) // RATE_SCALE
 
@@ -173,6 +222,10 @@ class CurrencyConverter:
         Returns:
             (historical_base_amount_scaled, current_base_amount_scaled, fx_gain_loss_scaled)
         """
+        if not isinstance(amount_scaled, int) or isinstance(amount_scaled, bool):
+            raise TypeError("amount_scaled must be an integer fixed-point value.")
+        if amount_scaled < 0:
+            raise ValueError("amount_scaled must be non-negative.")
         curr_dt = current_date or datetime.date.today().isoformat()
         hist_val = self.convert(amount_scaled, from_currency, base_currency, historical_date)
         curr_val = self.convert(amount_scaled, from_currency, base_currency, curr_dt)
