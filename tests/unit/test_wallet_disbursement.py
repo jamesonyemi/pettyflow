@@ -407,3 +407,41 @@ class TestDisbursementManager:
         assert req1.idempotency_key != req2.idempotency_key
         assert req1.idempotency_key.startswith("auto-")
         assert req2.idempotency_key.startswith("auto-")
+
+    def test_idempotency_survives_manager_restart(self, tmp_path):
+        from src.infrastructure.idempotency.store import SQLiteIdempotencyStore
+
+        db_path = str(tmp_path / "idempotency.sqlite3")
+        request = self._mobile_request()
+        first = DisbursementManager(
+            idempotency_store=SQLiteIdempotencyStore(db_path)
+        ).disburse_float(request)
+        second = DisbursementManager(
+            idempotency_store=SQLiteIdempotencyStore(db_path)
+        ).disburse_float(request)
+
+        assert second.disbursement_id == first.disbursement_id
+        assert second.mobile_disbursement is not None
+
+    def test_reusing_key_for_different_request_is_rejected(self, tmp_path):
+        from src.infrastructure.idempotency.store import (
+            IdempotencyConflictError,
+            SQLiteIdempotencyStore,
+        )
+
+        store = SQLiteIdempotencyStore(str(tmp_path / "idempotency.sqlite3"))
+        manager = DisbursementManager(idempotency_store=store)
+        first = self._card_request(amount=1_000_000)
+        manager.disburse_float(first)
+        conflicting = FloatDisbursementRequest(
+            tenant_id=first.tenant_id,
+            custodian_id=first.custodian_id,
+            fund_id=first.fund_id,
+            amount_scaled=2_000_000,
+            channel=first.channel,
+            cardholder_name=first.cardholder_name,
+            idempotency_key=first.idempotency_key,
+        )
+
+        with pytest.raises(IdempotencyConflictError):
+            manager.disburse_float(conflicting)

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import json
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -23,6 +24,7 @@ from typing import Dict, List, Optional
 from src.infrastructure.adapters.card_issuer import (
     CardIssuerAdapter,
     CardIssuerBackend,
+    CardStatus,
     VirtualCardRequest,
     VirtualCardResult,
 )
@@ -33,6 +35,7 @@ from src.infrastructure.adapters.mobile_money import (
     MobileMoneyAdapter,
     MobileMoneyBackend,
 )
+from src.infrastructure.idempotency.store import SQLiteIdempotencyStore
 
 
 # ---------------------------------------------------------------------------
@@ -140,13 +143,14 @@ class DisbursementManager:
         card_issuer: Optional[CardIssuerAdapter] = None,
         mobile_adapter: Optional[MobileMoneyAdapter] = None,
         idempotency_ttl_seconds: int = 86_400,
+        idempotency_store: Optional[SQLiteIdempotencyStore] = None,
     ):
         self._card_issuer = card_issuer or CardIssuerAdapter(CardIssuerBackend.MOCK)
         self._mobile_adapter = mobile_adapter or MobileMoneyAdapter(MobileMoneyBackend.MOCK)
         if idempotency_ttl_seconds <= 0:
             raise ValueError("idempotency_ttl_seconds must be positive")
         self._idempotency_ttl_seconds = idempotency_ttl_seconds
-        # Idempotency store: idempotency_key -> (FloatDisbursementResult, expires_at)
+        self._idempotency_store = idempotency_store or SQLiteIdempotencyStore()
         self._results: Dict[str, tuple[FloatDisbursementResult, datetime.datetime]] = {}
         self._audit_trail: List[FloatDisbursementResult] = []
 
@@ -181,10 +185,24 @@ class DisbursementManager:
         if not isinstance(request, FloatDisbursementRequest):
             raise TypeError("request must be a FloatDisbursementRequest")
 
-        self._prune_expired_idempotency_keys()
-        cached = self._results.get(request.idempotency_key)
-        if cached is not None:
-            return cached[0]
+        request_payload = {
+            "tenant_id": request.tenant_id,
+            "custodian_id": request.custodian_id,
+            "fund_id": request.fund_id,
+            "amount_scaled": request.amount_scaled,
+            "channel": request.channel.value,
+            "currency": request.currency,
+            "recipient_address": request.recipient_address,
+            "cardholder_name": request.cardholder_name,
+            "description": request.description,
+            "metadata": request.metadata,
+        }
+        fingerprint = self._idempotency_store.fingerprint(request_payload)
+        stored = self._idempotency_store.get_or_reserve(
+            request.tenant_id, request.idempotency_key, fingerprint
+        )
+        if stored is not None:
+            return self._result_from_dict(json.loads(stored.result_json))
 
         disbursement_id = f"fdisb_{uuid.uuid4().hex[:16]}"
         now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -196,8 +214,73 @@ class DisbursementManager:
         else:
             raise ValueError(f"Unknown disbursement channel: {request.channel}")
 
+        stored_result = self._idempotency_store.save(
+            request.tenant_id,
+            request.idempotency_key,
+            fingerprint,
+            json.dumps(result.to_dict(), sort_keys=True),
+        )
+        if stored_result.result_json != json.dumps(result.to_dict(), sort_keys=True):
+            return self._result_from_dict(json.loads(stored_result.result_json))
         self._record_idempotent_result(request, result)
         return result
+
+    @staticmethod
+    def _result_from_dict(payload: dict) -> FloatDisbursementResult:
+        virtual_card = payload.get("virtual_card")
+        card_result = None
+        if virtual_card is not None:
+            card_result = VirtualCardResult(
+                card_id=virtual_card["card_id"],
+                tenant_id=virtual_card["tenant_id"],
+                custodian_id=virtual_card["custodian_id"],
+                fund_id=virtual_card["fund_id"],
+                last_four=virtual_card["last_four"],
+                card_status=CardStatus(virtual_card["card_status"]),
+                spending_limit_scaled=virtual_card["spending_limit_scaled"],
+                currency=virtual_card["currency"],
+                idempotency_key=virtual_card["idempotency_key"],
+                backend=CardIssuerBackend(virtual_card["backend"]),
+                created_at=virtual_card["created_at"],
+                expires_at=virtual_card["expires_at"],
+                metadata=virtual_card.get("metadata", {}),
+            )
+        mobile_disbursement = payload.get("mobile_disbursement")
+        mobile_result = None
+        if mobile_disbursement is not None:
+            mobile_result = DisbursementResult(
+                disbursement_id=mobile_disbursement["disbursement_id"],
+                tenant_id=mobile_disbursement["tenant_id"],
+                custodian_id=mobile_disbursement["custodian_id"],
+                fund_id=mobile_disbursement["fund_id"],
+                recipient_phone_or_account=mobile_disbursement["recipient"],
+                amount_scaled=mobile_disbursement["amount_scaled"],
+                currency=mobile_disbursement["currency"],
+                status=DisbursementStatus(mobile_disbursement["status"]),
+                backend=MobileMoneyBackend(mobile_disbursement["backend"]),
+                idempotency_key=mobile_disbursement["idempotency_key"],
+                reference_number=mobile_disbursement["reference_number"],
+                initiated_at=mobile_disbursement["initiated_at"],
+                completed_at=mobile_disbursement.get("completed_at"),
+                failure_reason=mobile_disbursement.get("failure_reason"),
+                metadata=mobile_disbursement.get("metadata", {}),
+            )
+        return FloatDisbursementResult(
+            disbursement_id=payload["disbursement_id"],
+            tenant_id=payload["tenant_id"],
+            custodian_id=payload["custodian_id"],
+            fund_id=payload["fund_id"],
+            channel=DisbursementChannel(payload["channel"]),
+            amount_scaled=payload["amount_scaled"],
+            currency=payload["currency"],
+            status=payload["status"],
+            idempotency_key=payload["idempotency_key"],
+            virtual_card=card_result,
+            mobile_disbursement=mobile_result,
+            initiated_at=payload["initiated_at"],
+            completed_at=payload.get("completed_at"),
+            failure_reason=payload.get("failure_reason"),
+        )
 
     def _disburse_via_card(
         self,
