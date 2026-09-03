@@ -8,6 +8,7 @@ Acceptance Criteria per Roadmap:
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from src.infrastructure.adapters.card_issuer import (
@@ -27,6 +28,12 @@ from src.domain.wallet.disbursement_manager import (
     DisbursementManager,
     FloatDisbursementRequest,
 )
+from src.infrastructure.idempotency.store import (
+    IdempotencyInProgressError,
+    ProviderEventConflictError,
+    SQLiteIdempotencyStore,
+)
+from src.domain.wallet.settlement import SettlementState, SettlementTransitionError
 
 
 # ===========================================================================
@@ -342,6 +349,18 @@ class TestDisbursementManager:
         assert r1.disbursement_id == r2.disbursement_id
         assert self.manager.count_disbursements() == 1
 
+    def test_idempotency_audit_records_canonical_and_reused_result(self):
+        request = self._card_request()
+        self.manager.disburse_float(request)
+        self.manager.disburse_float(request)
+
+        events = self.manager._audit_logger.get_entries("TENANT-ORG")
+        assert [event.event_type for event in events] == [
+            "DISBURSEMENT_CANONICAL_RESULT",
+            "DISBURSEMENT_RESULT_REUSED",
+        ]
+        assert self.manager._audit_logger.verify_integrity("TENANT-ORG")
+
     def test_amount_float_property(self):
         req = self._card_request(amount=2_000_000)  # $200
         result = self.manager.disburse_float(req)
@@ -424,10 +443,7 @@ class TestDisbursementManager:
         assert second.mobile_disbursement is not None
 
     def test_reusing_key_for_different_request_is_rejected(self, tmp_path):
-        from src.infrastructure.idempotency.store import (
-            IdempotencyConflictError,
-            SQLiteIdempotencyStore,
-        )
+        from src.infrastructure.idempotency.store import IdempotencyConflictError
 
         store = SQLiteIdempotencyStore(str(tmp_path / "idempotency.sqlite3"))
         manager = DisbursementManager(idempotency_store=store)
@@ -445,3 +461,68 @@ class TestDisbursementManager:
 
         with pytest.raises(IdempotencyConflictError):
             manager.disburse_float(conflicting)
+
+    def test_concurrent_duplicate_requests_have_one_owner(self, tmp_path):
+        manager = DisbursementManager(
+            idempotency_store=SQLiteIdempotencyStore(str(tmp_path / "idempotency.sqlite3"))
+        )
+        request = self._card_request()
+
+        def submit():
+            try:
+                return manager.disburse_float(request)
+            except IdempotencyInProgressError:
+                return None
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _: submit(), range(2)))
+
+        completed = [result for result in results if result is not None]
+        assert len({result.disbursement_id for result in completed}) == 1
+        assert manager.count_disbursements() == 1
+
+    def test_provider_callback_replay_is_ignored(self, tmp_path):
+        manager = DisbursementManager(
+            idempotency_store=SQLiteIdempotencyStore(str(tmp_path / "idempotency.sqlite3"))
+        )
+        payload = {"status": "processing", "disbursement_id": "fdisb-1"}
+
+        assert manager.ingest_provider_event(
+            "TENANT-ORG", "bank", "evt-1", payload, SettlementState.PENDING
+        )
+        assert not manager.ingest_provider_event(
+            "TENANT-ORG", "bank", "evt-1", payload, SettlementState.PENDING
+        )
+        events = manager._audit_logger.get_entries("TENANT-ORG")
+        assert [event.event_type for event in events] == [
+            "PROVIDER_EVENT_ACCEPTED",
+            "PROVIDER_EVENT_REPLAYED",
+        ]
+
+    def test_provider_callback_conflict_and_invalid_transition_are_rejected(self, tmp_path):
+        manager = DisbursementManager(
+            idempotency_store=SQLiteIdempotencyStore(str(tmp_path / "idempotency.sqlite3"))
+        )
+        with pytest.raises(SettlementTransitionError):
+            manager.ingest_provider_event(
+                "TENANT-ORG",
+                "bank",
+                "evt-1",
+                {"status": "reversed"},
+                SettlementState.PENDING,
+            )
+        manager.ingest_provider_event(
+            "TENANT-ORG",
+            "bank",
+            "evt-1",
+            {"status": "processing"},
+            SettlementState.PENDING,
+        )
+        with pytest.raises(ProviderEventConflictError):
+            manager.ingest_provider_event(
+                "TENANT-ORG",
+                "bank",
+                "evt-1",
+                {"status": "completed"},
+                SettlementState.PROCESSING,
+            )

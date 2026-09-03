@@ -36,6 +36,13 @@ from src.infrastructure.adapters.mobile_money import (
     MobileMoneyBackend,
 )
 from src.infrastructure.idempotency.store import SQLiteIdempotencyStore
+from src.infrastructure.idempotency.store import IdempotencyInProgressError
+from src.infrastructure.idempotency.store import ProviderEventConflictError
+from src.infrastructure.audit.tamper_log import WORMAuditLogger
+from src.domain.wallet.settlement import (
+    SettlementState,
+    validate_settlement_transition,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +151,7 @@ class DisbursementManager:
         mobile_adapter: Optional[MobileMoneyAdapter] = None,
         idempotency_ttl_seconds: int = 86_400,
         idempotency_store: Optional[SQLiteIdempotencyStore] = None,
+        audit_logger: Optional[WORMAuditLogger] = None,
     ):
         self._card_issuer = card_issuer or CardIssuerAdapter(CardIssuerBackend.MOCK)
         self._mobile_adapter = mobile_adapter or MobileMoneyAdapter(MobileMoneyBackend.MOCK)
@@ -151,6 +159,7 @@ class DisbursementManager:
             raise ValueError("idempotency_ttl_seconds must be positive")
         self._idempotency_ttl_seconds = idempotency_ttl_seconds
         self._idempotency_store = idempotency_store or SQLiteIdempotencyStore()
+        self._audit_logger = audit_logger or WORMAuditLogger()
         self._results: Dict[str, tuple[FloatDisbursementResult, datetime.datetime]] = {}
         self._audit_trail: List[FloatDisbursementResult] = []
 
@@ -198,32 +207,110 @@ class DisbursementManager:
             "metadata": request.metadata,
         }
         fingerprint = self._idempotency_store.fingerprint(request_payload)
-        stored = self._idempotency_store.get_or_reserve(
-            request.tenant_id, request.idempotency_key, fingerprint
-        )
+        try:
+            stored = self._idempotency_store.get_or_reserve(
+                request.tenant_id, request.idempotency_key, fingerprint
+            )
+        except Exception as error:
+            self._audit_logger.append_event(
+                request.tenant_id,
+                "DISBURSEMENT_IDEMPOTENCY_CONFLICT",
+                "system",
+                {"idempotency_key": request.idempotency_key, "error": str(error)},
+            )
+            raise
         if stored is not None:
+            if stored.status == "in_progress":
+                raise IdempotencyInProgressError(
+                    "disbursement for this idempotency key is already in progress"
+                )
+            self._audit_logger.append_event(
+                request.tenant_id,
+                "DISBURSEMENT_RESULT_REUSED",
+                "system",
+                {"idempotency_key": request.idempotency_key},
+            )
             return self._result_from_dict(json.loads(stored.result_json))
 
         disbursement_id = f"fdisb_{uuid.uuid4().hex[:16]}"
         now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-        if request.channel == DisbursementChannel.VIRTUAL_CARD:
-            result = self._disburse_via_card(request, disbursement_id, now_str)
-        elif request.channel in (DisbursementChannel.MOBILE_MONEY, DisbursementChannel.ACH):
-            result = self._disburse_via_mobile(request, disbursement_id, now_str)
-        else:
-            raise ValueError(f"Unknown disbursement channel: {request.channel}")
+        try:
+            if request.channel == DisbursementChannel.VIRTUAL_CARD:
+                result = self._disburse_via_card(request, disbursement_id, now_str)
+            elif request.channel in (DisbursementChannel.MOBILE_MONEY, DisbursementChannel.ACH):
+                result = self._disburse_via_mobile(request, disbursement_id, now_str)
+            else:
+                raise ValueError(f"Unknown disbursement channel: {request.channel}")
+        except Exception as error:
+            self._idempotency_store.abandon(
+                request.tenant_id, request.idempotency_key, fingerprint
+            )
+            self._audit_logger.append_event(
+                request.tenant_id,
+                "DISBURSEMENT_DOWNSTREAM_FAILURE",
+                "system",
+                {"idempotency_key": request.idempotency_key, "error": str(error)},
+            )
+            raise
 
-        stored_result = self._idempotency_store.save(
+        stored_result = self._idempotency_store.complete(
             request.tenant_id,
             request.idempotency_key,
             fingerprint,
             json.dumps(result.to_dict(), sort_keys=True),
         )
-        if stored_result.result_json != json.dumps(result.to_dict(), sort_keys=True):
-            return self._result_from_dict(json.loads(stored_result.result_json))
         self._record_idempotent_result(request, result)
+        self._audit_logger.append_event(
+            request.tenant_id,
+            "DISBURSEMENT_CANONICAL_RESULT",
+            "system",
+            {
+                "idempotency_key": request.idempotency_key,
+                "disbursement_id": result.disbursement_id,
+                "status": result.status,
+            },
+        )
         return result
+
+    def ingest_provider_event(
+        self,
+        tenant_id: str,
+        provider: str,
+        event_id: str,
+        payload: dict,
+        current_state: SettlementState,
+    ) -> bool:
+        """Claim a provider callback and validate its settlement transition.
+
+        Returns False for an identical replay, while payload conflicts and
+        illegal state changes are surfaced to the caller.
+        """
+        payload_fingerprint = self._idempotency_store.fingerprint(payload)
+        requested_state = SettlementState(payload["status"])
+        validate_settlement_transition(current_state, requested_state)
+        claimed = self._idempotency_store.claim_provider_event(
+            tenant_id, provider, event_id, payload_fingerprint
+        )
+        if not claimed:
+            self._audit_logger.append_event(
+                tenant_id,
+                "PROVIDER_EVENT_REPLAYED",
+                "system",
+                {"provider": provider, "event_id": event_id},
+            )
+            return False
+        self._audit_logger.append_event(
+            tenant_id,
+            "PROVIDER_EVENT_ACCEPTED",
+            "system",
+            {
+                "provider": provider,
+                "event_id": event_id,
+                "status": requested_state.value,
+            },
+        )
+        return True
 
     @staticmethod
     def _result_from_dict(payload: dict) -> FloatDisbursementResult:
