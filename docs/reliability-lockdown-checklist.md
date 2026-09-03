@@ -47,13 +47,24 @@ Before marking an item complete, record the owner, dependency, evidence link, ex
 Guarantee that retries, callback replays, and duplicate submissions cannot cause duplicate financial actions.
 
 ### Tasks
-- [ ] Implement durable idempotency storage for disbursement requests
-- [ ] Attach idempotency keys to critical ledger writes and external settlement operations
-- [ ] Validate same request submitted twice produces the same result without duplicate side effects
-- [ ] Add webhook callback replay protection and deduplication by provider event ID
-- [ ] Define request/retry semantics for payment failures, network retries, and partial settlement states
-- [ ] Add audit records documenting idempotency key usage and result reuse
-- [ ] Enforce bounded retention, uniqueness, and concurrency-safe reads for idempotency keys and provider event IDs
+- [x] Implement durable idempotency storage for disbursement requests
+- [x] Attach idempotency keys to critical ledger writes and external settlement operations
+- [x] Validate same request submitted twice produces the same result without duplicate side effects
+- [x] Add webhook callback replay protection and deduplication by provider event ID
+- [x] Define request/retry semantics for payment failures, network retries, and partial settlement states
+- [x] Add audit records documenting idempotency key usage and result reuse
+- [x] Enforce bounded retention, uniqueness, and concurrency-safe reads for idempotency keys and provider event IDs
+
+### Implementation evidence
+
+- [x] SQLite durable store defines tenant/key uniqueness, request fingerprints, in-flight reservation, terminal completion, and compatibility upgrade for existing local stores
+- [x] Disbursement orchestration reserves before downstream execution and releases failed reservations for safe retry
+- [x] Generic provider event ingestion deduplicates identical event IDs and rejects payload conflicts
+- [x] Settlement transition rules reject illegal state changes and make manual review explicit
+- [x] Audit chain records canonical results, result reuse, callback acceptance/replay, conflicts, and downstream failures
+- [x] Tests cover restart recovery, concurrent duplicate requests, callback replay/conflict, settlement transitions, audit integrity, and ledger regression coverage
+
+The production relational repository, provider-specific HTTP handlers, and external settlement reconciliation remain deployment prerequisites rather than Week 1 local-domain deliverables.
 
 ### Acceptance criteria
 - Retries of the same external request do not create multiple disbursements

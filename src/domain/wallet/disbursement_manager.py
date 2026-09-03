@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import json
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -23,6 +24,7 @@ from typing import Dict, List, Optional
 from src.infrastructure.adapters.card_issuer import (
     CardIssuerAdapter,
     CardIssuerBackend,
+    CardStatus,
     VirtualCardRequest,
     VirtualCardResult,
 )
@@ -32,6 +34,14 @@ from src.infrastructure.adapters.mobile_money import (
     DisbursementStatus,
     MobileMoneyAdapter,
     MobileMoneyBackend,
+)
+from src.infrastructure.idempotency.store import SQLiteIdempotencyStore
+from src.infrastructure.idempotency.store import IdempotencyInProgressError
+from src.infrastructure.idempotency.store import ProviderEventConflictError
+from src.infrastructure.audit.tamper_log import WORMAuditLogger
+from src.domain.wallet.settlement import (
+    SettlementState,
+    validate_settlement_transition,
 )
 
 
@@ -140,13 +150,16 @@ class DisbursementManager:
         card_issuer: Optional[CardIssuerAdapter] = None,
         mobile_adapter: Optional[MobileMoneyAdapter] = None,
         idempotency_ttl_seconds: int = 86_400,
+        idempotency_store: Optional[SQLiteIdempotencyStore] = None,
+        audit_logger: Optional[WORMAuditLogger] = None,
     ):
         self._card_issuer = card_issuer or CardIssuerAdapter(CardIssuerBackend.MOCK)
         self._mobile_adapter = mobile_adapter or MobileMoneyAdapter(MobileMoneyBackend.MOCK)
         if idempotency_ttl_seconds <= 0:
             raise ValueError("idempotency_ttl_seconds must be positive")
         self._idempotency_ttl_seconds = idempotency_ttl_seconds
-        # Idempotency store: idempotency_key -> (FloatDisbursementResult, expires_at)
+        self._idempotency_store = idempotency_store or SQLiteIdempotencyStore()
+        self._audit_logger = audit_logger or WORMAuditLogger()
         self._results: Dict[str, tuple[FloatDisbursementResult, datetime.datetime]] = {}
         self._audit_trail: List[FloatDisbursementResult] = []
 
@@ -181,23 +194,180 @@ class DisbursementManager:
         if not isinstance(request, FloatDisbursementRequest):
             raise TypeError("request must be a FloatDisbursementRequest")
 
-        self._prune_expired_idempotency_keys()
-        cached = self._results.get(request.idempotency_key)
-        if cached is not None:
-            return cached[0]
+        request_payload = {
+            "tenant_id": request.tenant_id,
+            "custodian_id": request.custodian_id,
+            "fund_id": request.fund_id,
+            "amount_scaled": request.amount_scaled,
+            "channel": request.channel.value,
+            "currency": request.currency,
+            "recipient_address": request.recipient_address,
+            "cardholder_name": request.cardholder_name,
+            "description": request.description,
+            "metadata": request.metadata,
+        }
+        fingerprint = self._idempotency_store.fingerprint(request_payload)
+        try:
+            stored = self._idempotency_store.get_or_reserve(
+                request.tenant_id, request.idempotency_key, fingerprint
+            )
+        except Exception as error:
+            self._audit_logger.append_event(
+                request.tenant_id,
+                "DISBURSEMENT_IDEMPOTENCY_CONFLICT",
+                "system",
+                {"idempotency_key": request.idempotency_key, "error": str(error)},
+            )
+            raise
+        if stored is not None:
+            if stored.status == "in_progress":
+                raise IdempotencyInProgressError(
+                    "disbursement for this idempotency key is already in progress"
+                )
+            self._audit_logger.append_event(
+                request.tenant_id,
+                "DISBURSEMENT_RESULT_REUSED",
+                "system",
+                {"idempotency_key": request.idempotency_key},
+            )
+            return self._result_from_dict(json.loads(stored.result_json))
 
         disbursement_id = f"fdisb_{uuid.uuid4().hex[:16]}"
         now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-        if request.channel == DisbursementChannel.VIRTUAL_CARD:
-            result = self._disburse_via_card(request, disbursement_id, now_str)
-        elif request.channel in (DisbursementChannel.MOBILE_MONEY, DisbursementChannel.ACH):
-            result = self._disburse_via_mobile(request, disbursement_id, now_str)
-        else:
-            raise ValueError(f"Unknown disbursement channel: {request.channel}")
+        try:
+            if request.channel == DisbursementChannel.VIRTUAL_CARD:
+                result = self._disburse_via_card(request, disbursement_id, now_str)
+            elif request.channel in (DisbursementChannel.MOBILE_MONEY, DisbursementChannel.ACH):
+                result = self._disburse_via_mobile(request, disbursement_id, now_str)
+            else:
+                raise ValueError(f"Unknown disbursement channel: {request.channel}")
+        except Exception as error:
+            self._idempotency_store.abandon(
+                request.tenant_id, request.idempotency_key, fingerprint
+            )
+            self._audit_logger.append_event(
+                request.tenant_id,
+                "DISBURSEMENT_DOWNSTREAM_FAILURE",
+                "system",
+                {"idempotency_key": request.idempotency_key, "error": str(error)},
+            )
+            raise
 
+        stored_result = self._idempotency_store.complete(
+            request.tenant_id,
+            request.idempotency_key,
+            fingerprint,
+            json.dumps(result.to_dict(), sort_keys=True),
+        )
         self._record_idempotent_result(request, result)
+        self._audit_logger.append_event(
+            request.tenant_id,
+            "DISBURSEMENT_CANONICAL_RESULT",
+            "system",
+            {
+                "idempotency_key": request.idempotency_key,
+                "disbursement_id": result.disbursement_id,
+                "status": result.status,
+            },
+        )
         return result
+
+    def ingest_provider_event(
+        self,
+        tenant_id: str,
+        provider: str,
+        event_id: str,
+        payload: dict,
+        current_state: SettlementState,
+    ) -> bool:
+        """Claim a provider callback and validate its settlement transition.
+
+        Returns False for an identical replay, while payload conflicts and
+        illegal state changes are surfaced to the caller.
+        """
+        payload_fingerprint = self._idempotency_store.fingerprint(payload)
+        requested_state = SettlementState(payload["status"])
+        validate_settlement_transition(current_state, requested_state)
+        claimed = self._idempotency_store.claim_provider_event(
+            tenant_id, provider, event_id, payload_fingerprint
+        )
+        if not claimed:
+            self._audit_logger.append_event(
+                tenant_id,
+                "PROVIDER_EVENT_REPLAYED",
+                "system",
+                {"provider": provider, "event_id": event_id},
+            )
+            return False
+        self._audit_logger.append_event(
+            tenant_id,
+            "PROVIDER_EVENT_ACCEPTED",
+            "system",
+            {
+                "provider": provider,
+                "event_id": event_id,
+                "status": requested_state.value,
+            },
+        )
+        return True
+
+    @staticmethod
+    def _result_from_dict(payload: dict) -> FloatDisbursementResult:
+        virtual_card = payload.get("virtual_card")
+        card_result = None
+        if virtual_card is not None:
+            card_result = VirtualCardResult(
+                card_id=virtual_card["card_id"],
+                tenant_id=virtual_card["tenant_id"],
+                custodian_id=virtual_card["custodian_id"],
+                fund_id=virtual_card["fund_id"],
+                last_four=virtual_card["last_four"],
+                card_status=CardStatus(virtual_card["card_status"]),
+                spending_limit_scaled=virtual_card["spending_limit_scaled"],
+                currency=virtual_card["currency"],
+                idempotency_key=virtual_card["idempotency_key"],
+                backend=CardIssuerBackend(virtual_card["backend"]),
+                created_at=virtual_card["created_at"],
+                expires_at=virtual_card["expires_at"],
+                metadata=virtual_card.get("metadata", {}),
+            )
+        mobile_disbursement = payload.get("mobile_disbursement")
+        mobile_result = None
+        if mobile_disbursement is not None:
+            mobile_result = DisbursementResult(
+                disbursement_id=mobile_disbursement["disbursement_id"],
+                tenant_id=mobile_disbursement["tenant_id"],
+                custodian_id=mobile_disbursement["custodian_id"],
+                fund_id=mobile_disbursement["fund_id"],
+                recipient_phone_or_account=mobile_disbursement["recipient"],
+                amount_scaled=mobile_disbursement["amount_scaled"],
+                currency=mobile_disbursement["currency"],
+                status=DisbursementStatus(mobile_disbursement["status"]),
+                backend=MobileMoneyBackend(mobile_disbursement["backend"]),
+                idempotency_key=mobile_disbursement["idempotency_key"],
+                reference_number=mobile_disbursement["reference_number"],
+                initiated_at=mobile_disbursement["initiated_at"],
+                completed_at=mobile_disbursement.get("completed_at"),
+                failure_reason=mobile_disbursement.get("failure_reason"),
+                metadata=mobile_disbursement.get("metadata", {}),
+            )
+        return FloatDisbursementResult(
+            disbursement_id=payload["disbursement_id"],
+            tenant_id=payload["tenant_id"],
+            custodian_id=payload["custodian_id"],
+            fund_id=payload["fund_id"],
+            channel=DisbursementChannel(payload["channel"]),
+            amount_scaled=payload["amount_scaled"],
+            currency=payload["currency"],
+            status=payload["status"],
+            idempotency_key=payload["idempotency_key"],
+            virtual_card=card_result,
+            mobile_disbursement=mobile_result,
+            initiated_at=payload["initiated_at"],
+            completed_at=payload.get("completed_at"),
+            failure_reason=payload.get("failure_reason"),
+        )
 
     def _disburse_via_card(
         self,
