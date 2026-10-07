@@ -160,7 +160,7 @@ class DisbursementManager:
         self._idempotency_ttl_seconds = idempotency_ttl_seconds
         self._idempotency_store = idempotency_store or SQLiteIdempotencyStore()
         self._audit_logger = audit_logger or WORMAuditLogger()
-        self._results: Dict[str, tuple[FloatDisbursementResult, datetime.datetime]] = {}
+        self._results: Dict[tuple[str, str], tuple[FloatDisbursementResult, datetime.datetime]] = {}
         self._audit_trail: List[FloatDisbursementResult] = []
 
     def _prune_expired_idempotency_keys(self) -> None:
@@ -175,7 +175,7 @@ class DisbursementManager:
         expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
             seconds=self._idempotency_ttl_seconds
         )
-        self._results[request.idempotency_key] = (result, expires_at)
+        self._results[(request.tenant_id, request.idempotency_key)] = (result, expires_at)
         self._audit_trail.append(result)
 
     def disburse_float(
@@ -287,8 +287,6 @@ class DisbursementManager:
         illegal state changes are surfaced to the caller.
         """
         payload_fingerprint = self._idempotency_store.fingerprint(payload)
-        requested_state = SettlementState(payload["status"])
-        validate_settlement_transition(current_state, requested_state)
         claimed = self._idempotency_store.claim_provider_event(
             tenant_id, provider, event_id, payload_fingerprint
         )
@@ -300,6 +298,14 @@ class DisbursementManager:
                 {"provider": provider, "event_id": event_id},
             )
             return False
+
+        requested_state = SettlementState(payload["status"])
+        try:
+            validate_settlement_transition(current_state, requested_state)
+        except Exception:
+            self._idempotency_store.abandon_provider_event(tenant_id, provider, event_id)
+            raise
+
         self._audit_logger.append_event(
             tenant_id,
             "PROVIDER_EVENT_ACCEPTED",
@@ -443,6 +449,8 @@ class DisbursementManager:
         """Return all disbursement audit records for a tenant."""
         return [r for r in self._audit_trail if r.tenant_id == tenant_id]
 
-    def count_disbursements(self) -> int:
+    def count_disbursements(self, tenant_id: Optional[str] = None) -> int:
         """Total unique disbursements (for testing)."""
+        if tenant_id is not None:
+            return sum(1 for (t, _) in self._results.keys() if t == tenant_id)
         return len(self._results)

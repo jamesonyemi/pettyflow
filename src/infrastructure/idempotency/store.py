@@ -229,6 +229,19 @@ class SQLiteIdempotencyStore:
             )
             return True
 
+    def abandon_provider_event(
+        self, tenant_id: str, provider: str, event_id: str
+    ) -> None:
+        """Release a claimed provider event that failed downstream validation."""
+        with self._lock:
+            self._connection.execute(
+                """
+                DELETE FROM provider_events
+                WHERE tenant_id = ? AND provider = ? AND event_id = ?
+                """,
+                (tenant_id, provider, event_id),
+            )
+
     def get_or_reserve(
         self,
         tenant_id: str,

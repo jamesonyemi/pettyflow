@@ -155,8 +155,8 @@ class MobileMoneyAdapter:
     ):
         self.backend = backend
         self.simulate_failure = simulate_failure
-        # idempotency_key -> DisbursementResult
-        self._disbursements: Dict[str, DisbursementResult] = {}
+        # (tenant_id, idempotency_key) -> DisbursementResult
+        self._disbursements: Dict[tuple[str, str], DisbursementResult] = {}
         self._by_id: Dict[str, DisbursementResult] = {}
 
     def disburse(self, request: DisbursementRequest) -> DisbursementResult:
@@ -174,7 +174,7 @@ class MobileMoneyAdapter:
             MobileMoneyError: If disbursement fails at the provider level.
         """
         # Idempotency check — return existing without double-sending
-        existing = self._disbursements.get(request.idempotency_key)
+        existing = self._disbursements.get((request.tenant_id, request.idempotency_key))
         if existing is not None:
             return existing
 
@@ -221,13 +221,18 @@ class MobileMoneyAdapter:
                 },
             )
 
-        self._disbursements[request.idempotency_key] = result
+        self._disbursements[(request.tenant_id, request.idempotency_key)] = result
         self._by_id[disbursement_id] = result
         return result
 
-    def get_disbursement_status(self, disbursement_id: str) -> Optional[DisbursementResult]:
-        """Look up status of a disbursement by ID."""
-        return self._by_id.get(disbursement_id)
+    def get_disbursement_status(
+        self, disbursement_id: str, tenant_id: Optional[str] = None
+    ) -> Optional[DisbursementResult]:
+        """Look up status of a disbursement by ID with optional tenant check."""
+        result = self._by_id.get(disbursement_id)
+        if result is not None and tenant_id is not None and result.tenant_id != tenant_id:
+            return None
+        return result
 
     def count_disbursements(self) -> int:
         """Return total number of unique disbursements (for testing)."""
