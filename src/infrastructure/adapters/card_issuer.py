@@ -138,8 +138,8 @@ class CardIssuerAdapter:
 
     def __init__(self, backend: CardIssuerBackend = CardIssuerBackend.MOCK):
         self.backend = backend
-        # Idempotency store: idempotency_key -> VirtualCardResult
-        self._issued_cards: Dict[str, VirtualCardResult] = {}
+        # Idempotency store: (tenant_id, idempotency_key) -> VirtualCardResult
+        self._issued_cards: Dict[tuple[str, str], VirtualCardResult] = {}
         # card_id -> VirtualCardResult for lookup
         self._cards_by_id: Dict[str, VirtualCardResult] = {}
 
@@ -155,8 +155,8 @@ class CardIssuerAdapter:
         Raises:
             CardIssuerError: If card creation fails at the payment network.
         """
-        # Idempotency: return existing card if same key already processed
-        existing = self._issued_cards.get(request.idempotency_key)
+        # Idempotency: return existing card if same key already processed for this tenant
+        existing = self._issued_cards.get((request.tenant_id, request.idempotency_key))
         if existing is not None:
             return existing
 
@@ -188,22 +188,27 @@ class CardIssuerAdapter:
             },
         )
 
-        self._issued_cards[request.idempotency_key] = result
+        self._issued_cards[(request.tenant_id, request.idempotency_key)] = result
         self._cards_by_id[card_id] = result
         return result
 
-    def get_card(self, card_id: str) -> Optional[VirtualCardResult]:
-        """Retrieve a previously issued card by card_id."""
-        return self._cards_by_id.get(card_id)
+    def get_card(self, card_id: str, tenant_id: Optional[str] = None) -> Optional[VirtualCardResult]:
+        """Retrieve a previously issued card by card_id with optional tenant boundary check."""
+        card = self._cards_by_id.get(card_id)
+        if card is not None and tenant_id is not None and card.tenant_id != tenant_id:
+            return None
+        return card
 
-    def cancel_card(self, card_id: str) -> bool:
-        """Cancel an active virtual card.
+    def cancel_card(self, card_id: str, tenant_id: Optional[str] = None) -> bool:
+        """Cancel an active virtual card with optional tenant boundary check.
 
         Returns:
-            True if cancellation succeeded, False if card not found.
+            True if cancellation succeeded, False if card not found or wrong tenant.
         """
         card = self._cards_by_id.get(card_id)
         if card is None:
+            return False
+        if tenant_id is not None and card.tenant_id != tenant_id:
             return False
         # Simulate in-place update (frozen dataclass workaround via replacement)
         cancelled = VirtualCardResult(

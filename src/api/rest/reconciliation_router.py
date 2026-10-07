@@ -152,6 +152,13 @@ def create_reconciliation_router(
                 detail=f"Reconciliation ID '{payload.reconciliation_id}' not found.",
             )
 
+        rec_tenant_id = _history[payload.reconciliation_id]["reconciliation"]["tenant_id"]
+        if payload.tenant_id != rec_tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Tenant boundary violation: Reconciliation belongs to tenant '{rec_tenant_id}' but sign-off attempted by '{payload.tenant_id}'.",
+            )
+
         record = {
             "signer_id": payload.signer_id,
             "signer_role": payload.signer_role,

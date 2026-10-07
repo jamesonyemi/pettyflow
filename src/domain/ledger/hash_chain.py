@@ -119,6 +119,11 @@ class CryptographicLedgerChain:
         """
         Validates transaction balance and appends a cryptographically signed block to the chain.
         """
+        if tx.tenant_id != self.tenant_id:
+            raise ValueError(
+                f"Cross-tenant transaction rejected: chain belongs to tenant '{self.tenant_id}', "
+                f"transaction belongs to tenant '{tx.tenant_id}'."
+            )
         tx.validate_balance()
 
         previous_hash = self.blocks[-1].current_hash if self.blocks else GENESIS_PREVIOUS_HASH
