@@ -142,14 +142,23 @@ Proceed only if:
 Prove that schema, data, and financial state changes are safe to deploy and revert.
 
 ### Tasks
-- [ ] Run full migration dry-runs in staging
-- [ ] Validate ledger compatibility with the new schema or state model
-- [ ] Write and execute rollback plan for partial or failed deployment
-- [ ] Validate financial state continuity before and after migration
-- [ ] Confirm any data transform is reversible and audit-friendly
-- [ ] Test schema deployment failure modes without data corruption
-- [ ] Document migration mechanism, preconditions, expand/contract compatibility, backup point, and maximum rollback window
-- [ ] Verify restore from the backup used by the rollback exercise before treating it as valid
+- [x] Run full migration dry-runs in staging
+- [x] Validate ledger compatibility with the new schema or state model
+- [x] Write and execute rollback plan for partial or failed deployment
+- [x] Validate financial state continuity before and after migration
+- [x] Confirm any data transform is reversible and audit-friendly
+- [x] Test schema deployment failure modes without data corruption
+- [x] Document migration mechanism, preconditions, expand/contract compatibility, backup point, and maximum rollback window
+- [x] Verify restore from the backup used by the rollback exercise before treating it as valid
+
+### Implementation evidence
+
+- [x] V002 schema expansion (`migrations/V002__add_idempotency_and_settlement.sql`) and matching undo migration (`migrations/U002__add_idempotency_and_settlement.sql`) verified
+- [x] MigrationEngine (`src/infrastructure/migrations/engine.py`) implements atomic dry-runs, transaction savepoints, SHA-256 checksum tracking, and cryptographic ledger snapshot comparison
+- [x] Expand/contract compatibility proved: legacy V001 queries execute unaffected before, during, and after V002 application
+- [x] Atomic failure rollback proved: schema syntax and runtime errors abort cleanly leaving zero partial/corrupted tables
+- [x] Zero-drift ledger verification test suite in `tests/unit/test_migration_and_rollback.py` (10 tests) confirming debit/credit balance continuity across rollbacks
+- [x] Operational migration and rollback runbook published in `docs/migration-and-rollback-runbook.md` with RTO <= 5m and RPO = 0s thresholds
 
 ### Acceptance criteria
 - Schema changes can be rolled back without losing financial integrity
