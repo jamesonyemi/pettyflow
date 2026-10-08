@@ -1,0 +1,57 @@
+name: Provision Roadmap GitHub Issues
+
+on:
+  push:
+    branches:
+      - "feature/reliability-lockdown"
+      - main
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  provision-issues:
+    name: Provision Roadmap Issues on GitHub
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create GitHub Issues from Templates
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          create_issue_if_missing() {
+            local title="$1"
+            local body_file="$2"
+            
+            existing=$(gh issue list --search "$title" --json number -q '.[0].number')
+            if [ -n "$existing" ]; then
+              echo "Issue already exists: #$existing ($title)"
+            else
+              echo "Creating issue: $title"
+              gh issue create --title "$title" --body-file "$body_file"
+            fi
+          }
+
+          create_issue_if_missing \
+            "[Data Platform] Production TimescaleDB Hypertables & Continuous Aggregates" \
+            ".github/ISSUE_TEMPLATE/01_timescaledb_hypertables.md"
+
+          create_issue_if_missing \
+            "[API/gRPC] Implement High-Throughput gRPC Float Service & Client SDK" \
+            ".github/ISSUE_TEMPLATE/02_grpc_microservices.md"
+
+          create_issue_if_missing \
+            "[AI/OCR] Receipt Parsing Pipeline Hardening & Line-Item Extraction" \
+            ".github/ISSUE_TEMPLATE/03_receipt_ocr_pipeline.md"
+
+          create_issue_if_missing \
+            "[Security/Fraud] Advanced Split-Transaction Graph Clustering & Velocity Rules" \
+            ".github/ISSUE_TEMPLATE/04_fraud_graph_clustering.md"
+
+          create_issue_if_missing \
+            "[Frontend] Custodian Mobile PWA & Finance Director Approval Dashboard" \
+            ".github/ISSUE_TEMPLATE/05_custodian_mobile_ui.md"
