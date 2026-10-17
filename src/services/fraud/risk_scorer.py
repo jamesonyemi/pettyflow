@@ -2,12 +2,13 @@
 
 Aggregates multiple fraud signals into a single composite risk score:
 
-  Signal                      | Max Weight
-  --------------------------- | ----------
-  Duplicate Receipt (dHash)   | 50 pts
-  Split Transaction           | 30 pts
-  Amount Anomaly (z-score)    | 10 pts
-  Velocity (tx count/hour)    | 10 pts
+  Signal                            | Max Weight
+  --------------------------------- | ----------
+  Duplicate Receipt (dHash)         | 50 pts
+  Split Transaction / Smurfing      | 30 pts
+  Merchant Category Anomaly         | 15 pts
+  Amount Anomaly (z-score)          | 10 pts
+  Velocity (tx count/hour)          | 10 pts
 
 Risk Score Bands:
   0  – 20  : LOW      — No action required
@@ -70,6 +71,8 @@ class RiskScoreResult:
     amount_zscore: Optional[float]
     velocity_flag: bool
     hourly_tx_count: int
+    category_anomaly_flag: bool = False
+    smurfing_flag: bool = False
     triggered_signals: List[str] = field(default_factory=list)
     evaluated_at: str = field(
         default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -98,6 +101,8 @@ class RiskScoreResult:
             "amount_zscore": round(self.amount_zscore, 4) if self.amount_zscore is not None else None,
             "velocity_flag": self.velocity_flag,
             "hourly_tx_count": self.hourly_tx_count,
+            "category_anomaly_flag": self.category_anomaly_flag,
+            "smurfing_flag": self.smurfing_flag,
             "triggered_signals": self.triggered_signals,
             "evaluated_at": self.evaluated_at,
         }
@@ -110,31 +115,19 @@ class RiskScoreResult:
 # Weight constants
 _WEIGHT_DUPLICATE = 50
 _WEIGHT_SPLIT = 30
+_WEIGHT_SMURFING = 30
+_WEIGHT_CATEGORY_ANOMALY = 15
 _WEIGHT_AMOUNT_ANOMALY = 10
 _WEIGHT_VELOCITY = 10
 
 # Thresholds
 _ZSCORE_THRESHOLD = 2.5           # Flag if |z-score| >= 2.5 sigma
-_VELOCITY_THRESHOLD = 5           # Flag if > 5 transactions/hour
+_VELOCITY_THRESHOLD = 3           # Flag if > 3 disbursements within 1 hour per Roadmap
 _DUPLICATE_BIT_THRESHOLD = 5      # Hamming distance <= this = duplicate
 
 
 class FraudRiskScorer:
-    """Composite fraud risk score engine.
-
-    Usage:
-        scorer = FraudRiskScorer()
-        result = scorer.score(
-            transaction_id="tx-001",
-            tenant_id="tenant-abc",
-            custodian_id="custodian-xyz",
-            amount_scaled=1_500_000,       # $150.00
-            duplicate_hamming_distance=3,  # Near-duplicate image
-            split_window_total_scaled=None,
-            historical_amounts_scaled=[...],
-            hourly_tx_count=2,
-        )
-    """
+    """Composite fraud risk score engine."""
 
     def __init__(
         self,
@@ -151,10 +144,7 @@ class FraudRiskScorer:
         value: int,
         historical_values: List[int],
     ) -> Optional[float]:
-        """Compute z-score of value against historical distribution.
-
-        Returns None if fewer than 2 historical samples (insufficient data).
-        """
+        """Compute z-score of value against historical distribution."""
         n = len(historical_values)
         if n < 2:
             return None
@@ -178,6 +168,8 @@ class FraudRiskScorer:
         split_threshold_scaled: Optional[int] = None,
         historical_amounts_scaled: Optional[List[int]] = None,
         hourly_tx_count: int = 0,
+        category_anomaly: bool = False,
+        is_smurfing: bool = False,
     ) -> RiskScoreResult:
         """Compute composite risk score from all available fraud signals.
 
@@ -191,6 +183,8 @@ class FraudRiskScorer:
             split_threshold_scaled: Split threshold (to confirm exceeded).
             historical_amounts_scaled: Past amounts for z-score anomaly detection.
             hourly_tx_count: Number of transactions by this custodian in the last hour.
+            category_anomaly: True if merchant category anomaly was detected.
+            is_smurfing: True if multi-custodian smurfing collusion cluster detected.
 
         Returns:
             RiskScoreResult with composite score 0-100 and risk level.
@@ -207,7 +201,7 @@ class FraudRiskScorer:
                 f"DUPLICATE_RECEIPT(hamming={duplicate_hamming_distance})"
             )
 
-        # --- Signal 2: Split Transaction ---
+        # --- Signal 2: Split Transaction & Smurfing ---
         split_flag = False
         if (
             split_window_total_scaled is not None
@@ -215,12 +209,23 @@ class FraudRiskScorer:
             and split_window_total_scaled > split_threshold_scaled
         ):
             split_flag = True
-            raw_score += _WEIGHT_SPLIT
-            signals.append(
-                f"SPLIT_TRANSACTION(window_total=${split_window_total_scaled / 10_000:.2f})"
-            )
+            if is_smurfing:
+                raw_score += _WEIGHT_SMURFING
+                signals.append(
+                    f"SMURFING_COLLUSION(window_total=${split_window_total_scaled / 10_000:.2f})"
+                )
+            else:
+                raw_score += _WEIGHT_SPLIT
+                signals.append(
+                    f"SPLIT_TRANSACTION(window_total=${split_window_total_scaled / 10_000:.2f})"
+                )
 
-        # --- Signal 3: Amount Anomaly (z-score) ---
+        # --- Signal 3: Merchant Category Anomaly ---
+        if category_anomaly:
+            raw_score += _WEIGHT_CATEGORY_ANOMALY
+            signals.append("MERCHANT_CATEGORY_ANOMALY")
+
+        # --- Signal 4: Amount Anomaly (z-score) ---
         zscore = None
         amount_anomaly_flag = False
         if historical_amounts_scaled and len(historical_amounts_scaled) >= 2:
@@ -230,7 +235,7 @@ class FraudRiskScorer:
                 raw_score += _WEIGHT_AMOUNT_ANOMALY
                 signals.append(f"AMOUNT_ANOMALY(z={zscore:.2f})")
 
-        # --- Signal 4: Velocity (transactions/hour) ---
+        # --- Signal 5: Velocity (transactions/hour) ---
         velocity_flag = False
         if hourly_tx_count > self.velocity_threshold:
             velocity_flag = True
@@ -255,5 +260,7 @@ class FraudRiskScorer:
             amount_zscore=zscore,
             velocity_flag=velocity_flag,
             hourly_tx_count=hourly_tx_count,
+            category_anomaly_flag=category_anomaly,
+            smurfing_flag=is_smurfing,
             triggered_signals=signals,
         )
