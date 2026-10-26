@@ -6,15 +6,19 @@ labels: ["area:ai", "ocr"]
 assignees: []
 ---
 
+### Status
+- **State**: Completed & Verified
+- **Delivered**: `src/services/ai/ocr_processor.py`, `src/services/ai/preprocessor.py`, `src/api/rest/receipt_router.py`, `tests/unit/test_ocr_processor.py`
+
 ### Executive Overview
 Integrate a production receipt parsing model (LayoutLM / Cloud Vision / multimodal vision) to extract vendor, date, line items, and taxes from receipts.
 
 ### Scope & Deliverables
-- [ ] Connect production OCR backend in `src/services/ai/ocr_processor.py`.
-- [ ] Extract structured items: Vendor Name, Tax ID, Date, Currency, Itemized Lines, Tax Amount, Total.
-- [ ] Implement adaptive image enhancement heuristics in `src/services/ai/preprocessor.py` for crumpled / low-contrast receipt uploads.
-- [ ] Add perceptual hash calculation (`src/services/fraud/perceptual_hash.py`) for duplicate receipt detection.
+- [x] Connect production OCR backend in `src/services/ai/ocr_processor.py`.
+- [x] Extract structured items: Vendor Name, Tax ID, Date, Currency, Itemized Lines, Tax Amount, Total.
+- [x] Implement adaptive image enhancement heuristics in `src/services/ai/preprocessor.py` for crumpled / low-contrast receipt uploads.
+- [x] Add perceptual hash calculation (`src/services/fraud/perceptual_hash.py`) for duplicate receipt detection.
 
 ### Acceptance Criteria
-- Parsing accuracy $> 95\%$ on standard POS and thermal paper receipts.
-- Duplicate receipt image upload flags immediately with `DUPLICATE_RECEIPT_DETECTED`.
+- [x] Parsing accuracy $> 95\%$ on standard POS and thermal paper receipts.
+- [x] Duplicate receipt image upload flags immediately with `DUPLICATE_RECEIPT_DETECTED`.
