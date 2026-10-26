@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#4f46e5">
+  <meta name="description" content="PettyFlow Custodian Mobile PWA & Finance Director Real-Time Approval Dashboard">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>PettyFlow | Custodian PWA & Approval Dashboard</title>
+  
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+
+  <!-- Top App Navigation Bar -->
+  <header class="app-header">
+    <div class="header-container">
+      <div class="brand-section">
+        <div class="brand-logo">PF</div>
+        <div>
+          <span class="brand-title">PettyFlow</span>
+          <span class="brand-badge">Enterprise Ledger</span>
+        </div>
+      </div>
+
+      <!-- View Switcher Tabs -->
+      <nav class="nav-tabs">
+        <button class="tab-btn active" data-view="custodian">
+          <span>📱</span> Custodian PWA
+        </button>
+        <button class="tab-btn" data-view="dashboard">
+          <span>📊</span> Approval Dashboard
+        </button>
+      </nav>
+
+      <!-- Live WebSocket & Connectivity Status -->
+      <div class="header-status">
+        <div id="liveStatusIndicator" class="live-indicator">
+          <span class="pulsing-dot"></span>
+          <span id="liveStatusLabel">Live Feed Connected</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-wrapper">
+    <!-- Offline Sync Banner -->
+    <div id="offlineBanner" class="offline-banner" style="display: none;">
+      <div>
+        <strong>Offline Queue Active</strong> &bull; <span id="draftCount">0</span> draft(s) stored locally.
+      </div>
+      <button onclick="syncAllPendingDrafts()">Sync Now</button>
+    </div>
+
+    <!-- VIEW 1: CUSTODIAN MOBILE PWA -->
+    <section id="custodianView" class="view-container active">
+      
+      <!-- Live Float Balance Widget -->
+      <div class="float-balance-widget">
+        <div class="float-top">
+          <div>
+            <div class="float-label">Branch Vault Available Float</div>
+            <div id="floatAmountDisplay" class="float-amount">$2,450.00</div>
+          </div>
+          <button class="btn-refresh" onclick="refreshFloatBalance()">↻ Refresh</button>
+        </div>
+        <div class="float-meta">
+          <div>
+            Fund: <strong>Main Vault Fund</strong> &bull; Currency: <strong id="floatCurrencyDisplay">USD</strong>
+          </div>
+          <div class="float-tag">🟢 Custodian: <strong>CUSTODIAN_BRANCH_42</strong></div>
+        </div>
+      </div>
+
+      <!-- Pending Offline Drafts Card (Collapsed by default unless drafts exist) -->
+      <div class="app-card" style="margin-bottom: 1.25rem;">
+        <div class="card-header">
+          <h3 class="card-title"><span>📦</span> Offline Expense Drafts Queue</h3>
+          <button class="btn-secondary" style="min-height:32px; padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="syncAllPendingDrafts()">Sync All</button>
+        </div>
+        <div id="draftsQueueList">
+          <p style="font-size:0.813rem; color:var(--text-muted);">No offline drafts pending sync.</p>
+        </div>
+      </div>
+
+      <!-- Expense Submission & Camera Receipt Capture Grid -->
+      <div class="grid-stack grid-two-col">
+        
+        <!-- Receipt Capture & Camera Card -->
+        <div class="app-card">
+          <div class="card-header">
+            <h3 class="card-title"><span>📷</span> Receipt Capture & AI OCR</h3>
+            <span style="font-size:0.75rem; color:var(--text-muted);">TrOCR Enabled</span>
+          </div>
+
+          <input 
+            type="file" 
+            id="receiptFileInput" 
+            accept="image/*" 
+            capture="environment" 
+            style="display: none;" 
+            onchange="handleReceiptFileSelect(event)"
+          >
+
+          <div class="receipt-dropzone" onclick="document.getElementById('receiptFileInput').click()">
+            <div class="dropzone-icon">📸</div>
+            <div class="dropzone-title">Tap to Take Photo or Upload Receipt</div>
+            <div class="dropzone-hint">Supports JPEG, PNG, or Camera Snapshots (Auto-Deskew & OCR)</div>
+          </div>
+
+          <!-- Camera Preview & AI Scan Status -->
+          <div id="cameraPreviewBox" class="camera-preview-box">
+            <img id="cameraPreviewImg" class="camera-preview-img" alt="Captured Receipt">
+          </div>
+          <div id="ocrStatusChip" class="ocr-result-chip" style="display: none;"></div>
+        </div>
+
+        <!-- Expense Request Form -->
+        <div class="app-card">
+          <div class="card-header">
+            <h3 class="card-title"><span>📝</span> Submit Disbursement Request</h3>
+          </div>
+
+          <form id="expenseForm" onsubmit="handleExpenseSubmit(event)">
+            <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 0.75rem;">
+              <div class="form-group">
+                <label class="form-label" for="expenseAmountInput">Disbursement Amount ($)</label>
+                <input 
+                  type="number" 
+                  step="0.01" 
+                  min="0.01" 
+                  id="expenseAmountInput" 
+                  class="form-control" 
+                  placeholder="0.00" 
+                  required
+                  oninput="onExpenseAmountChanged(this.value)"
+                >
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="expenseCurrencySelect">Currency</label>
+                <select id="expenseCurrencySelect" class="form-control">
+                  <option value="USD">USD ($)</option>
+                  <option value="EUR">EUR (€)</option>
+                  <option value="GBP">GBP (£)</option>
+                  <option value="CAD">CAD ($)</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Dynamic Policy Tier Indicator -->
+            <div id="tierPreviewBanner" class="tier-preview-banner tier-auto">
+              <span id="tierPreviewLabel">🟢 Tier 1: Auto-Approve</span>
+              <span id="tierPreviewNote" style="font-size:0.75rem; font-weight:normal;">Instant auto-approval (&lt; $50.00)</span>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="merchantInput">Merchant / Payee Name</label>
+              <input 
+                type="text" 
+                id="merchantInput" 
+                class="form-control" 
+                placeholder="e.g. Office Depot, Shell, USPS"
+              >
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="expenseDescInput">Business Justification / Description</label>
+              <textarea 
+                id="expenseDescInput" 
+                class="form-control" 
+                rows="2" 
+                placeholder="Brief description of expenditure purpose"
+                required
+              ></textarea>
+            </div>
+
+            <button type="submit" class="btn-primary">
+              <span>🚀</span> Submit for Approval
+            </button>
+          </form>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- VIEW 2: MANAGEMENT APPROVAL DASHBOARD -->
+    <section id="dashboardView" class="view-container">
+      
+      <!-- Management KPI Metric Cards -->
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-card-title">Total Pending Approvals</div>
+          <div id="kpiTotalPending" class="kpi-card-value">0</div>
+          <div id="kpiPendingAmount" class="kpi-card-sub">$0.00 Pending Volume</div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-card-title">Tier 1: Auto-Approved</div>
+          <div id="kpiTier1" class="kpi-card-value" style="color:#34d399;">0</div>
+          <div class="kpi-card-sub">&lt; $50.00 Policy Rule</div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-card-title">Tier 2: Manager Queue</div>
+          <div id="kpiTier2" class="kpi-card-value" style="color:#fbbf24;">0</div>
+          <div class="kpi-card-sub">$50.00 – $499.99 Rule</div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-card-title">Tier 3: CFO / Director Queue</div>
+          <div id="kpiTier3" class="kpi-card-value" style="color:#f87171;">0</div>
+          <div class="kpi-card-sub">&ge; $500.00 Rule</div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-card-title">Queue Performance</div>
+          <div class="kpi-card-value" style="font-size:1.125rem;">
+            <span id="renderLatencyBadge" class="latency-meter">Render: 0.0ms</span>
+          </div>
+          <div class="kpi-card-sub">Engineering Target: &lt; 200ms</div>
+        </div>
+      </div>
+
+      <!-- Filters & Actions Header -->
+      <div class="filters-bar">
+        <div class="filter-pills">
+          <button class="filter-pill active" data-filter-tier="ALL" onclick="setFilterTier('ALL')">All Tiers</button>
+          <button class="filter-pill" data-filter-tier="AUTO_APPROVE" onclick="setFilterTier('AUTO_APPROVE')">Tier 1: Auto</button>
+          <button class="filter-pill" data-filter-tier="MANAGER" onclick="setFilterTier('MANAGER')">Tier 2: Manager</button>
+          <button class="filter-pill" data-filter-tier="FINANCE_DIRECTOR" onclick="setFilterTier('FINANCE_DIRECTOR')">Tier 3: CFO</button>
+        </div>
+
+        <div class="filter-pills">
+          <button class="filter-pill active" data-filter-state="PENDING" onclick="setFilterState('PENDING')">Pending Inbox</button>
+          <button class="filter-pill" data-filter-state="APPROVED" onclick="setFilterState('APPROVED')">Approved</button>
+          <button class="filter-pill" data-filter-state="REJECTED" onclick="setFilterState('REJECTED')">Rejected</button>
+          <button class="filter-pill" data-filter-state="ALL" onclick="setFilterState('ALL')">All Records</button>
+        </div>
+      </div>
+
+      <!-- Real-Time Approval Queue List -->
+      <div class="queue-container">
+        <div id="approvalQueueList">
+          <div style="padding: 2.5rem; text-align: center; color: var(--text-muted);">
+            Loading approval queue...
+          </div>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- 1-Click Approval / Rejection Modal (Mandatory Audit Reasoning) -->
+  <div id="actionModal" class="modal-overlay">
+    <div class="modal-content">
+      <h3 id="actionModalTitle" class="modal-title">1-Click Approve Disbursement</h3>
+      <p style="font-size:0.813rem; color:var(--text-secondary); margin-bottom:1rem;">
+        Mandatory Audit Reasoning: Regulatory compliance requires an explicit justification for this decision.
+      </p>
+
+      <div class="form-group">
+        <label class="form-label">Quick Preset Justifications:</label>
+        <div id="actionPresets" class="preset-pills"></div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="actionAuditNotes">Audit Justification Notes (Required):</label>
+        <textarea 
+          id="actionAuditNotes" 
+          class="form-control" 
+          rows="3" 
+          placeholder="State reason for approval or rejection..."
+          required
+        ></textarea>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn-secondary" onclick="closeActionModal()">Cancel</button>
+        <button id="actionConfirmBtn" class="btn-primary" style="width:auto;" onclick="confirmApprovalAction()">
+          Confirm Decision
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Immutable Audit Trail History Modal -->
+  <div id="auditModal" class="modal-overlay">
+    <div class="modal-content" style="max-width: 640px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+        <h3 class="modal-title">🔍 Request Audit Trail & Proof</h3>
+        <button onclick="closeAuditModal()" style="background:transparent; border:none; color:var(--text-muted); font-size:1.25rem; cursor:pointer;">&times;</button>
+      </div>
+      <div id="auditModalBody" class="modal-body"></div>
+      <div class="modal-actions">
+        <button class="btn-secondary" onclick="closeAuditModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- Main JavaScript Application Engine -->
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

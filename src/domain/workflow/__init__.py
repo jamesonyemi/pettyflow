@@ -19,6 +19,13 @@ from .policy_evaluator import (
     ApprovalPolicyEvaluator,
     DEFAULT_PETTYFLOW_POLICY,
 )
+from .service import (
+    ApprovalWorkflowService,
+    WorkflowEvent,
+    ApprovalRequestNotFoundError,
+    MandatoryAuditReasoningMissingError,
+    InsufficientApproverAuthorityError,
+)
 
 __all__ = [
     # State Machine
@@ -34,4 +41,10 @@ __all__ = [
     "PolicyEvaluationResult",
     "ApprovalPolicyEvaluator",
     "DEFAULT_PETTYFLOW_POLICY",
+    # Service
+    "ApprovalWorkflowService",
+    "WorkflowEvent",
+    "ApprovalRequestNotFoundError",
+    "MandatoryAuditReasoningMissingError",
+    "InsufficientApproverAuthorityError",
 ]
