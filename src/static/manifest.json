@@ -1,0 +1,26 @@
+{
+  "name": "PettyFlow Custodian PWA & Management Dashboard",
+  "short_name": "PettyFlow",
+  "description": "Mobile-first PWA for branch custodians and real-time management approval dashboard for PettyFlow.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0b0f19",
+  "theme_color": "#4f46e5",
+  "categories": ["finance", "business", "productivity"],
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192' fill='%234f46e5'><rect width='192' height='192' rx='36' fill='%23111827'/><path d='M96 36v120M48 64l48-28 48 28M48 128l48 28 48-28' stroke='%23818cf8' stroke-width='16' stroke-linecap='round' stroke-linejoin='round'/><circle cx='96' cy='96' r='24' fill='%234f46e5'/></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' fill='%234f46e5'><rect width='512' height='512' rx='96' fill='%23111827'/><path d='M256 96v320M128 170l128-74 128 74M128 342l128 74 128-74' stroke='%23818cf8' stroke-width='40' stroke-linecap='round' stroke-linejoin='round'/><circle cx='256' cy='256' r='64' fill='%234f46e5'/></svg>",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
