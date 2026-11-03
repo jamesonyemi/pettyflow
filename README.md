@@ -19,6 +19,7 @@
 - [Performance & Latency Benchmarks](#-performance--latency-benchmarks)
 - [Repository Structure](#-repository-structure)
 - [Getting Started](#-getting-started)
+- [Docker & Containerized Setup](#-docker--containerized-setup)
 - [Usage & Code Examples](#-usage--code-examples)
 - [Testing & Quality Verification](#-testing--quality-verification)
 - [PDF Architecture & AI Roadmap](#-pdf-architecture--ai-roadmap)
@@ -185,6 +186,67 @@ pettyflow/
    ```
 
    To leave the virtual environment on any platform, run `deactivate`.
+
+---
+
+## 🐳 Docker & Containerized Setup
+
+PettyFlow provides a lightweight Dockerfile and multi-container Docker Compose configuration that orchestrates the API service with PostgreSQL 16 and Redis 7.
+
+### Step-by-Step Guide with Docker Compose
+
+Run the complete PettyFlow stack with database and cache in a single command:
+
+1. **Start all services**:
+   ```bash
+   docker compose up -d
+   ```
+   This spins up:
+   - `pettyflow-api`: FastAPI REST engine & PWA frontend on `http://localhost:8000` (interactive OpenAPI docs at `http://localhost:8000/docs`).
+   - `pettyflow-db`: PostgreSQL 16 database with health check on port `5432`.
+   - `pettyflow-redis`: Redis 7 atomic cache with health check on port `6379`.
+
+2. **Verify running containers**:
+   ```bash
+   docker compose ps
+   ```
+
+3. **Stream API logs**:
+   ```bash
+   docker compose logs -f app
+   ```
+
+4. **Run test suite inside the container**:
+   ```bash
+   docker compose run --rm app pytest -v
+   ```
+
+5. **Tear down services**:
+   ```bash
+   docker compose down
+   ```
+   *(Add `-v` to prune persisted database and cache volumes: `docker compose down -v`)*.
+
+---
+
+### Standalone Docker Instructions
+
+To build and run PettyFlow independently without Docker Compose:
+
+1. **Build the container image**:
+   ```bash
+   docker build -t pettyflow:latest .
+   ```
+
+2. **Run existing tests inside the container**:
+   ```bash
+   docker run --rm pettyflow:latest pytest -v
+   ```
+
+3. **Run the API server**:
+   ```bash
+   docker run -d --name pettyflow-api -p 8000:8000 pettyflow:latest
+   ```
 
 ---
 
