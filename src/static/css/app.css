@@ -164,6 +164,50 @@ body {
   gap: 0.75rem;
 }
 
+/* Approver Persona Selector */
+.actor-selector-box {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 4px 8px;
+}
+
+.actor-select-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.actor-select {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 0.813rem;
+  font-weight: 500;
+  padding: 4px 8px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 150ms cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.actor-select:hover {
+  border-color: var(--border-strong);
+}
+
+.actor-select:focus-visible {
+  border-color: var(--border-focus);
+  outline: 2px solid var(--brand-indigo);
+  outline-offset: 1px;
+}
+
 .live-indicator {
   display: flex;
   align-items: center;
