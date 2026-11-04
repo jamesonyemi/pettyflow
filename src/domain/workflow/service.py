@@ -26,6 +26,9 @@ from src.domain.workflow.state_machine import (
     WorkflowStateMachine,
 )
 
+# FundService is imported lazily to avoid circular imports at module level.
+# It is injected via ApprovalWorkflowService.__init__() as an optional dependency.
+
 
 class ApprovalRequestNotFoundError(ApprovalWorkflowException):
     """Raised when an approval request cannot be found within tenant scope."""
@@ -59,15 +62,23 @@ class ApprovalWorkflowService:
     Thread-safe approval workflow orchestrator.
     Manages in-memory tenant-isolated requests, executes policy checks,
     advances the finite state machine, and notifies subscribers.
+
+    Optional `fund_service` wires live float deductions into disbursement.
+    When provided, `disburse_request()` calls `FundService.issue_disbursement()`
+    after a successful state transition, closing the double-entry loop.
     """
 
     def __init__(
         self,
         policy_evaluator: Optional[ApprovalPolicyEvaluator] = None,
+        fund_service: Optional[Any] = None,
+        default_fund_id: Optional[Any] = None,
     ) -> None:
         self._policy_evaluator = policy_evaluator or ApprovalPolicyEvaluator(
             rules=DEFAULT_PETTYFLOW_POLICY
         )
+        self._fund_service = fund_service          # Optional[FundService]
+        self._default_fund_id = default_fund_id    # Optional[UUID]
         # Store requests keyed by (tenant_id, request_id)
         self._requests: Dict[Tuple[str, str], ApprovalRequest] = {}
         # Additional metadata store for receipt details, merchant info, etc.
@@ -323,8 +334,17 @@ class ApprovalWorkflowService:
         request_id: str,
         actor_id: str,
         notes: Optional[str] = None,
+        fund_id: Optional[Any] = None,
+        custodian_id: Optional[str] = None,
     ) -> ApprovalRequest:
-        """Disburse funds for an already approved request."""
+        """Disburse funds for an already approved request.
+
+        When a ``fund_service`` is wired in (via ``__init__``), deducts the
+        disbursed amount from the custodian's allocated float balance using
+        ``FundService.issue_disbursement()``, keeping the double-entry ledger
+        consistent.  ``fund_id`` defaults to ``self._default_fund_id`` when
+        not explicitly supplied.
+        """
         clean_tenant = str(tenant_id).strip()
         clean_request_id = str(request_id).strip()
         clean_actor = str(actor_id).strip()
@@ -345,6 +365,35 @@ class ApprovalWorkflowService:
             sm.disburse(actor_id=clean_actor, notes=clean_notes)
             request.updated_at = datetime.now(UTC)
 
+        # ── Float deduction ──────────────────────────────────────────────────
+        # After a successful APPROVED → DISBURSED transition, deduct the amount
+        # from the custodian's allocated balance.  Runs outside the workflow
+        # lock to avoid cross-lock ordering deadlocks (FundService has its own
+        # RLock).  Failures are non-fatal for the state machine but are
+        # captured in the event payload so callers/monitors can react.
+        fund_deduction_error: Optional[str] = None
+        new_balance_scaled: Optional[int] = None
+        if self._fund_service is not None:
+            try:
+                from uuid import UUID
+                _fund_id = fund_id or self._default_fund_id
+                _custodian_id = custodian_id or request.custodian_id
+                # IDs are stored as strings in workflow but FundService uses UUID
+                resolved_fund = UUID(str(_fund_id)) if _fund_id else None
+                resolved_tenant = UUID(str(clean_tenant)) if clean_tenant else None
+                resolved_custodian = UUID(str(_custodian_id)) if _custodian_id else None
+                if resolved_fund and resolved_tenant and resolved_custodian:
+                    balance = self._fund_service.issue_disbursement(
+                        tenant_id=resolved_tenant,
+                        fund_id=resolved_fund,
+                        custodian_id=resolved_custodian,
+                        amount_scaled=request.amount_scaled,
+                    )
+                    new_balance_scaled = balance.amount_scaled
+            except Exception as exc:  # noqa: BLE001
+                fund_deduction_error = str(exc)
+        # ────────────────────────────────────────────────────────────────────
+
         event = WorkflowEvent(
             event_type="REQUEST_DISBURSED",
             tenant_id=clean_tenant,
@@ -354,6 +403,10 @@ class ApprovalWorkflowService:
             amount_scaled=request.amount_scaled,
             actor_id=clean_actor,
             notes=clean_notes,
+            payload={
+                "new_balance_scaled": new_balance_scaled,
+                "fund_deduction_error": fund_deduction_error,
+            },
         )
         self._broadcast(event)
         return request

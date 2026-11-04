@@ -37,6 +37,13 @@
 
       <!-- Live WebSocket & Connectivity Status -->
       <div class="header-status">
+        <div class="actor-selector-box">
+          <label for="headerActorSelect" class="actor-select-label">Approver:</label>
+          <select id="headerActorSelect" class="actor-select" onchange="switchActor(this.value)">
+            <option value="MANAGER">Alex Cheng (Manager)</option>
+            <option value="FINANCE_DIRECTOR">Sarah Jenkins (Finance Director / CFO)</option>
+          </select>
+        </div>
         <div id="liveStatusIndicator" class="live-indicator">
           <span class="pulsing-dot"></span>
           <span id="liveStatusLabel">Live Feed Connected</span>
@@ -62,7 +69,7 @@
         <div class="float-top">
           <div>
             <div class="float-label">Branch Vault Available Float</div>
-            <div id="floatAmountDisplay" class="float-amount">$2,450.00</div>
+            <div id="floatAmountDisplay" class="float-amount">$0.00</div>
           </div>
           <button class="btn-refresh" onclick="refreshFloatBalance()">↻ Refresh</button>
         </div>
@@ -71,6 +78,15 @@
             Fund: <strong>Main Vault Fund</strong> &bull; Currency: <strong id="floatCurrencyDisplay">USD</strong>
           </div>
           <div class="float-tag">🟢 Custodian: <strong>CUSTODIAN_BRANCH_42</strong></div>
+        </div>
+      </div>
+
+      <!-- Imprest Replenishment Warning — shown when float < 20% of initial -->
+      <div id="imprestWarningBanner" style="display:none; align-items:center; gap:0.75rem; background:oklch(20% 0.03 25); border:1px solid oklch(65% 0.20 25); border-radius:0.5rem; padding:0.75rem 1rem; margin-bottom:1.25rem; font-size:0.875rem;">
+        <span style="font-size:1.25rem; flex-shrink:0;">⚠️</span>
+        <div>
+          <strong style="color:oklch(75% 0.18 25);">Float Below Replenishment Threshold</strong>
+          <span style="color:var(--text-secondary);"> — Available balance is at <strong data-imprest-pct>—</strong> of initial float. Request a top-up from Central Vault.</span>
         </div>
       </div>
 
@@ -259,6 +275,28 @@
       <p style="font-size:0.813rem; color:var(--text-secondary); margin-bottom:1rem;">
         Mandatory Audit Reasoning: Regulatory compliance requires an explicit justification for this decision.
       </p>
+
+      <!-- Tier 3 Authority Warning Banner -->
+      <div id="actionTierWarning" style="display:none; background:rgba(239, 68, 68, 0.12); border:1px solid rgba(239, 68, 68, 0.35); border-radius:8px; padding:0.75rem 1rem; margin-bottom:1rem; font-size:0.813rem;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+          <div>
+            <strong style="color:#ef4444;">Tier 3 Authority Required:</strong>
+            <span style="color:var(--text-secondary);"> Disbursement exceeds $500.00 and requires Finance Director / CFO approval.</span>
+          </div>
+          <button type="button" class="btn-primary" style="padding:4px 10px; font-size:0.75rem; width:auto; white-space:nowrap;" onclick="switchActor('FINANCE_DIRECTOR')">
+            Switch to Finance Director
+          </button>
+        </div>
+      </div>
+
+      <!-- Approver Role Selector in Modal -->
+      <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; background:var(--bg-primary); padding:8px 12px; border-radius:8px; border:1px solid var(--border-subtle); margin-bottom:1rem;">
+        <span style="font-size:0.813rem; color:var(--text-secondary); font-weight:500;">Acting Approver:</span>
+        <select id="modalActorSelect" class="actor-select" onchange="switchActor(this.value)">
+          <option value="MANAGER">Alex Cheng (Line Manager)</option>
+          <option value="FINANCE_DIRECTOR">Sarah Jenkins (Finance Director / CFO)</option>
+        </select>
+      </div>
 
       <div class="form-group">
         <label class="form-label">Quick Preset Justifications:</label>

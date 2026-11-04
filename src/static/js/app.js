@@ -13,7 +13,12 @@ const state = {
   actorId: "MGR_ALEX_CHENG",
   actorRole: "MANAGER", // "MANAGER" | "FINANCE_DIRECTOR"
   currentFundId: "fund-default-001",
-  availableBalanceScaled: 24500000, // $2,450.00
+  // UUIDs that map to the well-known demo identifiers seeded in app.py
+  tenantUUID: "00000000-0000-0000-0000-000000000001",
+  fundUUID: "00000000-0000-0000-0000-000000000002",
+  custodianUUID: "00000000-0000-0000-0000-000000000003",
+  availableBalanceScaled: 0,          // updated live from /v1/custodian/balance
+  initialFloatScaled: 500_000_000,    // $50,000.00 — seed matches app.py
   currency: "USD",
   isOnline: navigator.onLine,
   ws: null,
@@ -255,6 +260,11 @@ function handleWebSocketMessage(msg) {
     // Refresh live queue & stats with high priority
     loadApprovalQueue(false);
     loadSummaryStats();
+
+    // Refresh custodian float widget after any disbursement — the balance has changed.
+    if (msg.event_type === "REQUEST_DISBURSED") {
+      loadCustodianBalance();
+    }
   }
 }
 
@@ -285,6 +295,48 @@ function pulseLiveDot() {
 // 3. Custodian Float Balance & Receipt Scanning
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Fetch the custodian's live allocated float balance from the backend.
+ * Updates state.availableBalanceScaled and re-renders the widget.
+ * Also checks the imprest replenishment threshold (< 20% of initial float).
+ */
+async function loadCustodianBalance() {
+  if (!state.isOnline) return;
+  try {
+    const params = new URLSearchParams({
+      tenant_id: state.tenantUUID,
+      fund_id: state.fundUUID,
+      custodian_id: state.custodianUUID,
+    });
+    const res = await fetch(`/v1/custodian/balance?${params}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    state.availableBalanceScaled = data.amount_scaled ?? state.availableBalanceScaled;
+    state.currency = data.currency ?? state.currency;
+    updateFloatWidgetUI();
+    checkImprestThreshold();
+  } catch (e) {
+    console.warn("[Float] Balance fetch failed:", e);
+  }
+}
+
+/**
+ * Show a persistent warning banner when available float drops below 20%
+ * of the initial seeded float — imprest replenishment trigger.
+ */
+function checkImprestThreshold() {
+  const pct = state.availableBalanceScaled / (state.initialFloatScaled || 1);
+  const banner = document.getElementById("imprestWarningBanner");
+  if (!banner) return;
+  if (pct < 0.20) {
+    banner.style.display = "flex";
+    banner.querySelector("[data-imprest-pct]").textContent =
+      `${(pct * 100).toFixed(1)}%`;
+  } else {
+    banner.style.display = "none";
+  }
+}
+
 function updateFloatWidgetUI() {
   const amountEl = document.getElementById("floatAmountDisplay");
   const currencyEl = document.getElementById("floatCurrencyDisplay");
@@ -300,9 +352,8 @@ function updateFloatWidgetUI() {
 }
 
 function refreshFloatBalance() {
-  // In real backend, queries /v1/funds/{fund_id}/custodians/{custodian_id}/balance
+  loadCustodianBalance();
   showToast("Float balance refreshed", "success");
-  updateFloatWidgetUI();
 }
 
 // Dynamic Policy Tier Preview
@@ -622,6 +673,40 @@ function renderApprovalQueueDOM(requests) {
 // 5. 1-Click Action Modal & Mandatory Audit Reasoning
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Available Approver Personas
+const ACTORS = {
+  MANAGER: {
+    id: "MGR_ALEX_CHENG",
+    role: "MANAGER",
+    name: "Alex Cheng (Line Manager)",
+  },
+  FINANCE_DIRECTOR: {
+    id: "DIR_SARAH_JENKINS",
+    role: "FINANCE_DIRECTOR",
+    name: "Sarah Jenkins (Finance Director / CFO)",
+  },
+};
+
+function switchActor(role) {
+  const actor = ACTORS[role] || ACTORS.MANAGER;
+  state.actorId = actor.id;
+  state.actorRole = actor.role;
+
+  const headerSelect = document.getElementById("headerActorSelect");
+  if (headerSelect) headerSelect.value = actor.role;
+  const modalSelect = document.getElementById("modalActorSelect");
+  if (modalSelect) modalSelect.value = actor.role;
+
+  const warningBox = document.getElementById("actionTierWarning");
+  const req = state.approvalQueue.find((r) => r.request_id === state.activeModalRequestId);
+  if (warningBox) {
+    const isTier3 = req && req.required_approval_tier === "FINANCE_DIRECTOR";
+    warningBox.style.display = (isTier3 && actor.role !== "FINANCE_DIRECTOR") ? "block" : "none";
+  }
+
+  showToast(`Active approver: ${actor.name}`, "info");
+}
+
 function openActionModal(requestId, actionType) {
   state.activeModalRequestId = requestId;
   state.activeModalAction = actionType;
@@ -631,8 +716,23 @@ function openActionModal(requestId, actionType) {
   const confirmBtn = document.getElementById("actionConfirmBtn");
   const notesInput = document.getElementById("actionAuditNotes");
   const presetsBox = document.getElementById("actionPresets");
+  const warningBox = document.getElementById("actionTierWarning");
+  const modalActorSelect = document.getElementById("modalActorSelect");
 
   notesInput.value = "";
+
+  const req = state.approvalQueue.find((r) => r.request_id === requestId);
+  const isTier3 = req && req.required_approval_tier === "FINANCE_DIRECTOR";
+
+  if (modalActorSelect) {
+    modalActorSelect.value = state.actorRole;
+  }
+
+  if (isTier3 && state.actorRole !== "FINANCE_DIRECTOR" && actionType === "APPROVE") {
+    if (warningBox) warningBox.style.display = "block";
+  } else {
+    if (warningBox) warningBox.style.display = "none";
+  }
 
   if (actionType === "APPROVE") {
     title.textContent = "1-Click Approve Disbursement";
@@ -687,6 +787,14 @@ async function confirmApprovalAction() {
     return;
   }
 
+  // Auto-elevate to Finance Director if required for Tier 3 approvals
+  const req = state.approvalQueue.find((r) => r.request_id === state.activeModalRequestId);
+  if (req && req.required_approval_tier === "FINANCE_DIRECTOR" && state.actorRole !== "FINANCE_DIRECTOR") {
+    if (state.activeModalAction === "APPROVE") {
+      switchActor("FINANCE_DIRECTOR");
+    }
+  }
+
   const endpoint = state.activeModalAction === "APPROVE" ? "approve" : "reject";
   const url = `/v1/approvals/${encodeURIComponent(state.activeModalRequestId)}/${endpoint}`;
 
@@ -711,6 +819,8 @@ async function confirmApprovalAction() {
     showToast(`Request ${state.activeModalAction.toLowerCase()}d successfully!`, "success");
     loadApprovalQueue();
     loadSummaryStats();
+    // Refresh custodian float — approved auto-tier requests trigger disbursement immediately.
+    loadCustodianBalance();
   } catch (err) {
     showToast("Action failed: " + err.message, "error");
   }
@@ -874,6 +984,7 @@ window.addEventListener("DOMContentLoaded", () => {
   // Initial loads
   loadOfflineDrafts();
   initWebSocket();
-  updateFloatWidgetUI();
+  loadCustodianBalance();   // fetch live float balance on startup
+  updateFloatWidgetUI();    // render immediately with 0 while fetch is in-flight
   onExpenseAmountChanged(0);
 });
